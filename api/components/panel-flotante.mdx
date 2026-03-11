@@ -1,0 +1,359 @@
+---
+title: "PanelFlotante"
+description: "Floating dashboard panel component with glassmorphism styling for displaying real-time metrics"
+---
+
+## Overview
+
+`PanelFlotante` is a reusable floating panel component that displays real-time dashboard metrics. It uses absolute positioning to overlay the map background with a glassmorphism design featuring backdrop blur, subtle borders, and responsive sizing.
+
+**Key Features:**
+- Glassmorphism design with backdrop blur
+- Absolute positioning with percentage-based coordinates
+- Dark/light theme support
+- Responsive sizing with clamp()
+- Sky-blue accent for title bar
+
+## Component Props
+
+<ParamField path="titulo" type="string" required>
+  Panel title displayed in the header with uppercase styling
+  
+  **Examples:**
+  - `"🚨 Unidad Mayor Prioridad"`
+  - `"⏱ Tiempo Promedio Patio"`
+  - `"🔢 Conteo por Turno"`
+</ParamField>
+
+<ParamField path="children" type="ReactNode" required>
+  Panel content. Typically includes metric displays, charts, or status information
+</ParamField>
+
+<ParamField path="style" type="CSSProperties">
+  Additional inline styles for positioning and sizing. Commonly used properties:
+  
+  - `top`: Vertical position as percentage (e.g., `'5.69%'`)
+  - `left`: Horizontal position as percentage (e.g., `'70.78%'`)
+  - `width`: Panel width with clamp (e.g., `'clamp(160px,18vw,240px)'`)
+  
+  **Note:** These values are typically derived from the bay layout design.
+</ParamField>
+
+<ParamField path="darkMode" type="boolean" default="true">
+  Enables dark theme styling. When `true`, uses dark background with light text.
+</ParamField>
+
+## Styling Breakdown
+
+### Base Classes
+
+```typescript
+className={`
+  absolute z-[25] rounded-xl
+  border-t-2 border-sky-400/40
+  backdrop-blur-xl
+  transition-colors duration-300
+  ${darkMode
+    ? 'bg-black/75 border border-slate-600/20 shadow-[0_8px_28px_rgba(0,0,0,0.6),inset_0_1px_0_rgba(255,255,255,0.04)] text-slate-200'
+    : 'bg-white/90 border border-slate-200 shadow-[0_4px_20px_rgba(0,0,0,0.12)] text-slate-800'}
+`}
+```
+
+**Breakdown:**
+
+| Property | Purpose |
+|----------|----------|
+| `absolute` | Positioned relative to map container |
+| `z-[25]` | Above map (z-index: 25), below bays (z-20) and toasts (z-999) |
+| `rounded-xl` | 12px border radius |
+| `border-t-2 border-sky-400/40` | 2px top border with sky-blue at 40% opacity |
+| `backdrop-blur-xl` | Strong background blur for glassmorphism |
+| `transition-colors` | Smooth theme switching |
+
+### Dark Mode
+
+```css
+bg-black/75                /* 75% opaque black background */
+border border-slate-600/20 /* Subtle slate border */
+shadow-[...]               /* Layered shadows with inset highlight */
+text-slate-200             /* Light text color */
+```
+
+**Shadow Layers:**
+1. `0_8px_28px_rgba(0,0,0,0.6)` - Deep outer shadow
+2. `inset_0_1px_0_rgba(255,255,255,0.04)` - Subtle top highlight
+
+### Light Mode
+
+```css
+bg-white/90                /* 90% opaque white background */
+border border-slate-200    /* Neutral border */
+shadow-[0_4px_20px_...]    /* Softer shadow */
+text-slate-800             /* Dark text color */
+```
+
+## Padding System
+
+```typescript
+style={{
+  padding: 'clamp(8px,1vh,14px) clamp(10px,1.2vw,18px)',
+  ...style,
+}}
+```
+
+**Responsive Scaling:**
+- **Vertical**: `clamp(8px, 1vh, 14px)` - Scales with viewport height
+- **Horizontal**: `clamp(10px, 1.2vw, 18px)` - Scales with viewport width
+
+Ensures consistent spacing across different screen sizes.
+
+## Title Styling
+
+```tsx
+<div className="text-sky-400 font-bold tracking-widest uppercase opacity-85 mb-2"
+  style={{ fontSize: 'clamp(0.55rem,0.68vw,0.65rem)' }}>
+  {titulo}
+</div>
+```
+
+**Properties:**
+- `text-sky-400`: Bright sky-blue color (#38bdf8)
+- `font-bold`: 700 weight
+- `tracking-widest`: Increased letter-spacing
+- `uppercase`: All caps transformation
+- `opacity-85`: Subtle transparency
+- `mb-2`: 8px bottom margin
+- Responsive font size: 0.55rem → 0.68vw → 0.65rem
+
+## Usage Examples
+
+### Priority Unit Panel
+
+```tsx
+<PanelFlotante 
+  titulo="🚨 Unidad Mayor Prioridad" 
+  darkMode={darkMode}
+  style={{ top: '5.69%', left: '70.78%', width: 'clamp(160px,18vw,240px)' }}
+>
+  {!simulacionActiva ? (
+    <span className={dm ? 'text-slate-600' : 'text-slate-400'} 
+      style={{ fontSize: '0.75rem' }}>
+      — Iniciar para ver datos —
+    </span>
+  ) : panelPrioridad ? (
+    <div>
+      <div className="flex items-center gap-2 mb-1.5">
+        <span className="font-extrabold tracking-wider text-red-400"
+          style={{ fontSize: 'clamp(0.9rem,1.5vw,1.1rem)' }}>
+          {panelPrioridad.tracto}
+        </span>
+        <span className="rounded-full px-2 py-0.5 font-bold text-black bg-red-400"
+          style={{ fontSize: 'clamp(0.6rem,0.9vw,0.72rem)' }}>
+          ⏱ {intervalATexto(panelPrioridad.tiempo_transcurrido)}
+        </span>
+      </div>
+      <div className={`leading-relajada ${dm ? 'text-slate-400' : 'text-slate-500'}`}
+        style={{ fontSize: 'clamp(0.6rem,0.85vw,0.73rem)' }}>
+        <div>🕐 Llegada: {panelPrioridad.hora_llegada ?? '—'}</div>
+        <div>📍 Bahía: {panelPrioridad.bahia_actual ?? 'En cola'}</div>
+      </div>
+    </div>
+  ) : (
+    <span className={dm ? 'text-slate-500' : 'text-slate-400'} 
+      style={{ fontSize: '0.8rem' }}>
+      Sin unidades en cola
+    </span>
+  )}
+</PanelFlotante>
+```
+
+**Data Source:** `vw_unidad_prioridad` view from Supabase
+
+### Average Yard Time Panel
+
+```tsx
+<PanelFlotante 
+  titulo="⏱ Tiempo Promedio Patio" 
+  darkMode={darkMode}
+  style={{ top: '31.38%', left: '17.44%', width: 'clamp(140px,15vw,200px)' }}
+>
+  {!simulacionActiva ? (
+    <div className={`text-center ${dm ? 'text-slate-600' : 'text-slate-400'}`}
+      style={{ fontSize: '0.75rem' }}>
+      — Iniciar para ver datos —
+    </div>
+  ) : panelPromedio?.promedio_neto_patio ? (
+    <>
+      <div className="font-extrabold text-sky-400 text-center leading-none"
+        style={{ fontSize: 'clamp(1.4rem,2.5vw,2rem)' }}>
+        {intervalAMinutos(panelPromedio.promedio_neto_patio).toFixed(1)}
+        <span className="font-normal ml-1 text-slate-400" 
+          style={{ fontSize: 'clamp(0.7rem,1vw,0.9rem)' }}>min</span>
+      </div>
+      <div className={`text-center mt-1 ${dm ? 'text-slate-500' : 'text-slate-400'}`}
+        style={{ fontSize: 'clamp(0.52rem,0.7vw,0.65rem)' }}>
+        promedio neto del día
+      </div>
+      <div className="text-green-400 text-center mt-1" 
+        style={{ fontSize: '0.58rem' }}>
+        ✓ incidencias descontadas
+      </div>
+    </>
+  ) : (
+    <div className={`text-center ${dm ? 'text-slate-500' : 'text-slate-400'}`}
+      style={{ fontSize: 'clamp(0.72rem,0.9vw,0.82rem)' }}>
+      Sin finalizados hoy
+    </div>
+  )}
+</PanelFlotante>
+```
+
+**Data Source:** `vw_promedio_patio_neto` view from Supabase
+
+### Shift Count Panel
+
+```tsx
+<PanelFlotante 
+  titulo="🔢 Conteo por Turno" 
+  darkMode={darkMode}
+  style={{ top: '57.93%', left: '17.44%', width: 'clamp(155px,16vw,230px)' }}
+>
+  {!simulacionActiva ? (
+    <div className={`text-center ${dm ? 'text-slate-600' : 'text-slate-400'}`}
+      style={{ fontSize: '0.75rem' }}>
+      — Iniciar para ver datos —
+    </div>
+  ) : (
+    <div className="flex gap-4 justify-center">
+      {([  
+        { key: 'T1', campo: 'turno_1' as const, rango: '07:00–15:00' },
+        { key: 'T2', campo: 'turno_2' as const, rango: '15:01–23:00' },
+        { key: 'T3', campo: 'turno_3' as const, rango: '23:01–06:59' },
+      ] as const).map(({ key, campo, rango }) => (
+        <div key={key} className="text-center">
+          <div className="font-extrabold text-violet-400 leading-none"
+            style={{ fontSize: 'clamp(1.2rem,2vw,1.7rem)' }}>
+            {panelTurnos?.[campo] ?? 0}
+          </div>
+          <div className={`mt-0.5 ${dm ? 'text-slate-500' : 'text-slate-400'}`}
+            style={{ fontSize: 'clamp(0.52rem,0.7vw,0.68rem)' }}>{key}</div>
+          <div className={dm ? 'text-slate-600' : 'text-slate-400'}
+            style={{ fontSize: 'clamp(0.46rem,0.58vw,0.58rem)' }}>{rango}</div>
+        </div>
+      ))}
+    </div>
+  )}
+</PanelFlotante>
+```
+
+**Data Source:** `vw_dashboard_turnos` view from Supabase
+
+## Positioning Strategy
+
+### Absolute Positioning
+
+All panels use absolute positioning relative to the map container:
+
+```tsx
+<main id="mapa-area" className="flex-1 w-full relative overflow-hidden">
+  {/* Map background */}
+  
+  {/* Panels overlay */}
+  <PanelFlotante style={{ top: '5.69%', left: '70.78%', ... }} />
+  <PanelFlotante style={{ top: '31.38%', left: '17.44%', ... }} />
+  <PanelFlotante style={{ top: '57.93%', left: '17.44%', ... }} />
+</main>
+```
+
+### Z-Index Layering
+
+```
+999  - Toasts
+50   - Header
+30   - Queue footer
+25   - PanelFlotante
+20   - BahiaOverlay
+1    - Map veil
+0    - Map background
+```
+
+## Glassmorphism Effect
+
+The glassmorphism is achieved through a combination of:
+
+1. **Semi-transparent background**: `bg-black/75` or `bg-white/90`
+2. **Backdrop blur**: `backdrop-blur-xl` (24px blur)
+3. **Border with transparency**: `border-slate-600/20`
+4. **Top accent border**: `border-t-2 border-sky-400/40`
+5. **Layered shadows**: Outer shadow + inset highlight
+
+This creates a "frosted glass" appearance that allows the map to show through subtly.
+
+## Responsive Design
+
+All dimensions use `clamp()` for fluid scaling:
+
+```typescript
+// Panel width
+width: 'clamp(160px, 18vw, 240px)'
+
+// Padding
+padding: 'clamp(8px, 1vh, 14px) clamp(10px, 1.2vw, 18px)'
+
+// Title font size
+fontSize: 'clamp(0.55rem, 0.68vw, 0.65rem)'
+```
+
+**Benefits:**
+- No media queries needed
+- Smooth scaling between breakpoints
+- Maintains readability on all screen sizes
+
+## Theme Switching
+
+```tsx
+const [darkMode, setDarkMode] = useState(true);
+
+// Propagated to all panels
+<PanelFlotante darkMode={darkMode} ... />
+
+// Smooth transition
+className="transition-colors duration-300"
+```
+
+All color changes animate over 300ms when `darkMode` toggles.
+
+## Integration with Polling
+
+Panels are updated via the parent's polling mechanism:
+
+```typescript
+// SimuladorMapa.tsx:133-139
+const recargarPaneles = useCallback(async () => {
+  const [prioridad, turnos, promedio] = await Promise.all([
+    fetchUnidadPrioridad(),
+    fetchDashboardTurnos(),
+    fetchPromedioPatioNeto(),
+  ]);
+  if (prioridad != null) setPanelPrioridad(prioridad);
+  if (turnos    != null) setPanelTurnos(turnos);
+  if (promedio  != null) setPanelPromedio(promedio);
+}, []);
+
+// Polls every 15 seconds when active
+useEffect(() => {
+  if (!simulacionActiva) return;
+  recargarPaneles();
+  const poller = setInterval(recargarPaneles, 15_000);
+  return () => clearInterval(poller);
+}, [simulacionActiva, recargarPaneles]);
+```
+
+## References
+
+- **Source**: `src/Componentes/PanelFlotante.tsx:13-39`
+- **Parent**: [`SimuladorMapa`](/api/components/simulador-mapa)
+- **Database Views**: 
+  - `vw_unidad_prioridad` - Priority unit data
+  - `vw_dashboard_turnos` - Shift counts
+  - `vw_promedio_patio_neto` - Average yard time

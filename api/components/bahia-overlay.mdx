@@ -1,0 +1,469 @@
+---
+title: "BahiaOverlay"
+description: "Interactive bay card component with drag-and-drop support, traffic light status, and incident management"
+---
+
+## Overview
+
+`BahiaOverlay` represents an individual loading/unloading bay in the truck yard. It displays bay status, handles drag-and-drop truck assignments, shows real-time wait times with traffic light indicators, and provides action buttons for incident reporting and manual departure.
+
+**Key Features:**
+- Drag-and-drop assignment validation with visual feedback
+- Real-time traffic light status (green/yellow/red)
+- Progress bar showing wait time vs. threshold
+- Active incident polling indicator
+- Bay-to-bay truck transfer support
+- Help mode with compatibility highlighting
+
+## Component Props
+
+<ParamField path="bahiaId" type="string" required>
+  Unique identifier for the bay (e.g., `"bahia-1"`, `"bahia-2"`)
+</ParamField>
+
+<ParamField path="config" type="BahiaConfig" required>
+  Bay configuration object from `BAHIAS_CONFIG`
+  
+  ```typescript
+  interface BahiaConfig {
+    nombre: string;                    // Display name
+    posX: number;                      // X position on map (%)
+    posY: number;                      // Y position on map (%)
+    camionesPermitidos: TipoCamion[];  // Allowed truck types
+    tareas: {                          // Products by operation
+      C: string[];                     // Loading (Carga)
+      D: string[];                     // Unloading (Descarga)
+    };
+    alerta?: string;                   // Optional warning message
+  }
+  ```
+</ParamField>
+
+<ParamField path="camion" type="Camion | null" required>
+  Currently assigned truck, or `null` if bay is empty
+</ParamField>
+
+<ParamField path="camionArrastrando" type="Camion | null" required>
+  Truck currently being dragged by the user, used for validation preview
+</ParamField>
+
+<ParamField path="simulacionActiva" type="boolean" required>
+  Whether the simulation is running. Disables interactions when `false`
+</ParamField>
+
+<ParamField path="modoConfig" type="ConfigSimulador" required>
+  Global configuration including time scale mode and alert thresholds
+</ParamField>
+
+<ParamField path="validarFn" type="(c: Camion, bahiaId: string) => true | string" required>
+  Validation function that returns `true` or an error message string
+</ParamField>
+
+<ParamField path="onDrop" type="(bahiaId: string) => void" required>
+  Callback when a truck from the queue is dropped onto this bay
+</ParamField>
+
+<ParamField path="onDropFromBahia" type="(from: string, to: string) => void" required>
+  Callback when a truck is transferred from another bay to this bay
+</ParamField>
+
+<ParamField path="onFinalizar" type="(bahiaId: string, camion: Camion) => Promise<void>" required>
+  Callback when the user manually marks a truck's departure
+</ParamField>
+
+<ParamField path="formatTiempo" type="(ms: number, modo: ConfigSimulador['modo']) => string" required>
+  Time formatting function that respects simulation/real mode
+</ParamField>
+
+<ParamField path="darkMode" type="boolean" default="true">
+  Enables dark theme styling
+</ParamField>
+
+<ParamField path="onNotify" type="(msg: string, tipo?: 'success' | 'error' | 'info') => void" required>
+  Toast notification callback
+</ParamField>
+
+<ParamField path="onIncidenciaRegistrada" type="(camionId: string) => void" required>
+  Callback when an incident is successfully registered for a truck
+</ParamField>
+
+<ParamField path="modoAyuda" type="boolean" default="false">
+  When `true`, highlights compatible bays green and incompatible ones red
+</ParamField>
+
+## State Management
+
+### Local State
+
+```typescript
+const [isDragOver, setIsDragOver] = useState(false);
+const [now, setNow] = useState(() => Date.now());
+const [showIncidencia, setShowIncidencia] = useState(false);
+const [finalizando, setFinalizando] = useState(false);
+const [incidenciaActiva, setIncidenciaActiva] = useState(false);
+```
+
+- **isDragOver**: Visual feedback during drag operations
+- **now**: Current timestamp for traffic light calculation
+- **showIncidencia**: Controls incident modal visibility
+- **finalizando**: Prevents duplicate departure submissions
+- **incidenciaActiva**: Whether truck has an open incident
+
+## Traffic Light Logic
+
+```typescript
+let colorSemaforo = dm ? '#334155' : '#cbd5e1';  // Default: gray
+
+if (ocupada && camion) {
+  const ms = now - camion.tiempoLlegadaCola;
+  const factor = modoConfig.modo === 'real' ? 60_000 : 1_000;
+  const unidades = ms / factor;
+  
+  if (unidades >= modoConfig.tiempoRojo) 
+    colorSemaforo = '#ef4444';        // Red
+  else if (unidades >= modoConfig.tiempoAmarillo) 
+    colorSemaforo = '#eab308';        // Yellow
+  else 
+    colorSemaforo = '#22c55e';        // Green
+}
+```
+
+**Time Calculation:**
+- **Simulation mode**: `factor = 1000` (1 second = 1 unit)
+- **Real mode**: `factor = 60000` (1 minute = 1 unit)
+
+**Thresholds:**
+- Green: `< tiempoAmarillo`
+- Yellow: `>= tiempoAmarillo && < tiempoRojo`
+- Red: `>= tiempoRojo`
+
+## Incident Polling
+
+```typescript
+useEffect(() => {
+  if (!camion?.id_db) {
+    startTransition(() => setIncidenciaActiva(false));
+    return;
+  }
+  
+  const idCamion = Number(camion.id_db);
+  
+  // Immediate check
+  fetchIncidenciaAbierta(idCamion).then(setIncidenciaActiva);
+  
+  // Poll every 8 seconds
+  const poller = setInterval(() => {
+    fetchIncidenciaAbierta(idCamion).then(setIncidenciaActiva);
+  }, 8_000);
+  
+  return () => clearInterval(poller);
+}, [camion?.id_db]);
+```
+
+**Purpose:** Shows pulsing red indicator when truck has an open incident (no `hora_fin`)
+
+**Query:** `SELECT * FROM incidencias WHERE id_camion = ? AND hora_fin IS NULL LIMIT 1`
+
+## Dynamic Background Colors
+
+### Empty Bay
+
+```typescript
+let dropColor = dm ? 'rgba(15,23,42,0.85)' : 'rgba(255,255,255,0.90)';
+let borderColor = dm ? 'rgba(148,163,184,0.22)' : 'rgba(100,116,139,0.25)';
+```
+
+### Occupied Bay
+
+```typescript
+if (ocupada) {
+  if (colorSemaforo === '#ef4444')       // Red
+    dropColor = 'rgba(220,38,38,0.20)';
+  else if (colorSemaforo === '#eab308')  // Yellow
+    dropColor = 'rgba(234,179,8,0.16)';
+  else                                   // Green
+    dropColor = 'rgba(22,163,74,0.16)';
+  
+  borderColor = colorSemaforo;
+}
+```
+
+### Help Mode Highlighting
+
+```typescript
+if (modoAyuda && camionArrastrando && !ocupada && simulacionActiva) {
+  const res = validarFn(camionArrastrando, bahiaId);
+  dropColor = res === true 
+    ? 'rgba(22,163,74,0.30)'   // Compatible: green
+    : 'rgba(220,38,38,0.22)';  // Incompatible: red
+  borderColor = res === true ? '#22c55e' : '#ef4444';
+}
+```
+
+### Drag Over State
+
+```typescript
+if (isDragOver && !ocupada) {
+  dropColor = camionArrastrando && validarFn(camionArrastrando, bahiaId) === true
+    ? 'rgba(22,163,74,0.52)'   // Valid drop
+    : 'rgba(220,38,38,0.44)';  // Invalid drop
+}
+```
+
+## Drag-and-Drop Handlers
+
+### onDragOver
+
+```typescript
+onDragOver={e => {
+  e.preventDefault();
+  e.dataTransfer.dropEffect = 'move';
+  setIsDragOver(true);
+}}
+```
+
+Required to allow drop events. Sets visual feedback.
+
+### onDrop
+
+```typescript
+onDrop={e => {
+  e.preventDefault();
+  setIsDragOver(false);
+  
+  const fromBahia = e.dataTransfer.getData('fromBahia');
+  
+  if (fromBahia) 
+    onDropFromBahia(fromBahia, bahiaId);  // Bay-to-bay transfer
+  else 
+    onDrop(bahiaId);                       // Queue-to-bay assignment
+}}
+```
+
+**Data Transfer Keys:**
+- `fromBahia`: Set by occupied bays for bay-to-bay transfers
+- `truckId`: Set by TarjetaCamion for queue-to-bay assignments
+
+### onDragStart (Occupied Bay)
+
+```typescript
+<div draggable onDragStart={e => {
+  e.dataTransfer.setData('fromBahia', bahiaId);
+}} style={{ cursor: 'grab' }}>
+```
+
+Allows dragging trucks from one bay to another.
+
+## Action Buttons
+
+### Incident Button
+
+```typescript
+<button
+  onClick={e => {
+    e.stopPropagation();
+    setShowIncidencia(true);
+  }}
+  title="Registrar incidencia"
+  style={{
+    flex: 1,
+    background: 'rgba(245,158,11,0.18)',
+    color: '#fbbf24',
+    fontSize: '0.65rem',
+    fontWeight: 700,
+  }}
+>
+  ⚠️ Incid.
+</button>
+```
+
+Opens `ModalIncidencia` for incident reporting.
+
+### Departure Button
+
+```typescript
+const handleFinalizar = async () => {
+  if (!camion || finalizando) return;
+  if (!window.confirm(`¿Confirmar salida de ${camion.placa}?`)) return;
+  
+  setFinalizando(true);
+  await onFinalizar(bahiaId, camion);
+  setFinalizando(false);
+};
+
+<button
+  onClick={e => {
+    e.stopPropagation();
+    handleFinalizar();
+  }}
+  disabled={finalizando}
+  title="Marcar salida del patio"
+  style={{
+    flex: 1,
+    background: 'rgba(22,163,74,0.18)',
+    color: '#4ade80',
+    opacity: finalizando ? 0.5 : 1,
+  }}
+>
+  {finalizando ? '⏳' : '✅ Salida'}
+</button>
+```
+
+**Workflow:**
+1. Shows confirmation dialog
+2. Disables button during processing
+3. Calls parent's `onFinalizar` to update stats and database
+4. Re-enables button after completion
+
+## Progress Bar
+
+```typescript
+<div style={{ marginTop: 5, height: 3, borderRadius: 2, background: `${colorSemaforo}30` }}>
+  <div style={{
+    height: '100%',
+    borderRadius: 2,
+    background: colorSemaforo,
+    width: `${Math.min(
+      ((now - camion.tiempoLlegadaCola) / (modoConfig.modo === 'real' ? 60_000 : 1_000) / modoConfig.tiempoRojo) * 100,
+      100
+    )}%`,
+    transition: 'width 1s linear, background 0.5s',
+  }} />
+</div>
+```
+
+**Calculation:**
+- Width = `(elapsed / redThreshold) * 100%`
+- Capped at 100% when elapsed >= red threshold
+- Smooth 1-second animation
+
+## Empty Bay Display
+
+```typescript
+<div>
+  {/* Unloading operations */}
+  {bay.tareas.D.length > 0 && (
+    <div style={{ fontSize: 'clamp(0.5rem,0.6vw,0.6rem)', marginBottom: 2 }}>
+      <span style={{ color: '#4ade80', fontWeight: 700 }}>⬇ </span>
+      <span style={{ color: dm ? '#94a3b8' : '#64748b' }}>
+        {bay.tareas.D.join(', ')}
+      </span>
+    </div>
+  )}
+  
+  {/* Loading operations */}
+  {bay.tareas.C.length > 0 && (
+    <div style={{ fontSize: 'clamp(0.5rem,0.6vw,0.6rem)', marginBottom: 2 }}>
+      <span style={{ color: '#60a5fa', fontWeight: 700 }}>⬆ </span>
+      <span style={{ color: dm ? '#94a3b8' : '#64748b' }}>
+        {bay.tareas.C.join(', ')}
+      </span>
+    </div>
+  )}
+  
+  {/* Allowed truck types */}
+  <div style={{ fontSize: 'clamp(0.48rem,0.56vw,0.58rem)' }}>
+    🚛 {bay.camionesPermitidos.length > 3 
+      ? 'Todos los tipos' 
+      : bay.camionesPermitidos.map(t => NOMBRES_TIPO_CAMION[t]).join(', ')}
+  </div>
+  
+  {/* Warning message */}
+  {bay.alerta && (
+    <div style={{ marginTop: 3, fontSize: 'clamp(0.46rem,0.55vw,0.55rem)', color: '#f59e0b', fontWeight: 600 }}>
+      ⚠ {bay.alerta}
+    </div>
+  )}
+</div>
+```
+
+## Occupied Bay Display
+
+```typescript
+<div>
+  {/* Truck plate */}
+  <div style={{ fontWeight: 800, fontSize: 'clamp(0.74rem,0.92vw,0.9rem)', color: getColorEstado(camion.estadoAlerta) }}>
+    {camion.placa}
+  </div>
+  
+  {/* Truck type */}
+  <div style={{ fontSize: 'clamp(0.55rem,0.65vw,0.65rem)', color: dm ? '#94a3b8' : '#64748b' }}>
+    {NOMBRES_TIPO_CAMION[camion.tipoCodigo]}
+  </div>
+  
+  {/* Operation type */}
+  <div style={{ fontSize: 'clamp(0.55rem,0.65vw,0.65rem)', fontWeight: 700, color: camion.operacionCodigo === 'C' ? '#60a5fa' : '#4ade80' }}>
+    {camion.operacionCodigo === 'C' ? '⬆ CARGANDO' : '⬇ DESCARGANDO'}
+  </div>
+  
+  {/* Product */}
+  <div style={{ fontSize: 'clamp(0.52rem,0.6vw,0.62rem)', color: dm ? '#64748b' : '#94a3b8' }}>
+    {camion.producto}
+  </div>
+  
+  {/* Progress bar (see above) */}
+  
+  {/* Elapsed time */}
+  <div style={{ textAlign: 'center', marginTop: 3, fontSize: 'clamp(0.6rem,0.72vw,0.7rem)', color: colorSemaforo, fontWeight: 700 }}>
+    ⏱ {formatTiempo(now - camion.tiempoLlegadaCola, modoConfig.modo)}
+  </div>
+</div>
+```
+
+## Incident Indicator
+
+```typescript
+{incidenciaActiva && (
+  <span style={{
+    fontSize: '0.65rem',
+    animation: 'pulse 1s infinite',
+    lineHeight: 1,
+  }} title="Incidencia activa sin cerrar">
+    🔴
+  </span>
+)}
+```
+
+Displayed in the header next to the traffic light when `incidenciaActiva === true`.
+
+## Usage Example
+
+```tsx
+import BahiaOverlay from './BahiaOverlay';
+import { BAHIAS_CONFIG } from './bahiasConfig';
+
+function MapArea() {
+  return (
+    <div id="mapa-area" style={{ position: 'relative' }}>
+      {Object.entries(BAHIAS_CONFIG).map(([id, bay]) => (
+        <div key={id} style={{ position: 'absolute', left: `${bay.posX}%`, top: `${bay.posY}%` }}>
+          <BahiaOverlay
+            bahiaId={id}
+            config={bay}
+            camion={enProceso[id] || null}
+            camionArrastrando={camionArrastrando}
+            validarFn={validarAsignacion}
+            onDrop={handleDrop}
+            onDropFromBahia={handleDropFromBahia}
+            onFinalizar={handleFinalizar}
+            simulacionActiva={simulacionActiva}
+            modoConfig={config}
+            formatTiempo={formatTiempo}
+            darkMode={darkMode}
+            onNotify={notify}
+            onIncidenciaRegistrada={handleIncidenciaRegistrada}
+            modoAyuda={modoAyuda}
+          />
+        </div>
+      ))}
+    </div>
+  );
+}
+```
+
+## References
+
+- **Source**: `src/Componentes/BahiaOverlay.tsx:28-278`
+- **Parent**: [`SimuladorMapa`](/api/components/simulador-mapa)
+- **Related**: `ModalIncidencia.tsx`, `bahiasConfig.ts`
+- **Database**: `fetchIncidenciaAbierta()` from `supabaseService.ts`

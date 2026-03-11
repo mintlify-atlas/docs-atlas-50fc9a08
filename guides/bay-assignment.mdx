@@ -1,0 +1,289 @@
+---
+title: Bay Assignment
+description: Step-by-step guide to assigning trucks to bays with validation rules
+---
+
+## Overview
+
+Bay assignment is the core workflow in Dashboard Backus. This guide explains how to assign trucks to bays using drag-and-drop, understand validation rules, and handle special cases.
+
+<Note>
+  Bay assignment is only available to **Admin** users. Client users have view-only access.
+</Note>
+
+## Bay Configuration
+
+Dashboard Backus manages **10 bays** across the Backus yard:
+
+| Bay ID | Name | Location | Specialization |
+|--------|------|----------|----------------|
+| **b0.1** | Bahía 0.1 | Left side, middle | General discharge |
+| **b0.2** | Bahía 0.2 | Left side, lower | General discharge |
+| **b1** | Bahía 1 | Top left | General discharge |
+| **b2** | Bahía 2 | Top center-left | General discharge |
+| **b3** | Bahía 3 | Top center | Finished product (PT) |
+| **b4** | Bahía 4 | Top center-right | Finished product (PT) |
+| **b5** | Bahía 5 | Top right | Finished product (PT) |
+| **b14** | Bahía 14 | Right side, upper | Finished product + empty bottles |
+| **b10** | Bahía 10 | Far right, middle | Restricted (coordination required) |
+| **b12** | Bahía 12 | Far right, lower | Restricted (coordination required) |
+
+## Assigning Trucks to Bays
+
+<Steps>
+  <Step title="Identify Truck in Queue">
+    Review the truck queue at the bottom of the screen. Each truck card displays:
+    - **Plate number** (e.g., "BFW-234")
+    - **Truck type** (Parihuelero, Jumbo, Bi-tren, Tolva, Otros)
+    - **Operation** (Carga ⬆ or Descarga ⬇)
+    - **Product type** (e.g., "PT", "PP", "Fardos")
+    - **Wait time** with traffic light color
+    - **Incident count** (if any)
+    
+    <Tip>
+      Prioritize trucks with red traffic light status to minimize wait times.
+    </Tip>
+  </Step>
+  
+  <Step title="Enable Help Mode (Optional)">
+    Click the lightbulb icon in the header to highlight compatible bays:
+    - **Green bays**: Compatible with the truck being dragged
+    - **Red bays**: Incompatible due to validation rules
+    
+    This visual aid helps prevent assignment errors.
+  </Step>
+  
+  <Step title="Drag Truck to Bay">
+    1. Click and hold on the truck card in the queue
+    2. Drag the cursor over the desired bay on the yard map
+    3. The bay will highlight to indicate drop readiness
+    4. Release the mouse button to complete the assignment
+    
+    <Warning>
+      If the assignment violates validation rules, an error toast will appear and the assignment will be rejected.
+    </Warning>
+  </Step>
+  
+  <Step title="Confirm Special Bays">
+    Bays **b10** and **b12** require coordination with the T2 team:
+    - A confirmation dialog will appear: "¡ATENCIÓN! Coordina con T2."
+    - Click "OK" to proceed with the assignment
+    - Click "Cancel" to choose a different bay
+  </Step>
+  
+  <Step title="Verify Assignment">
+    Once assigned, the truck:
+    - Disappears from the queue
+    - Appears in the target bay with real-time status
+    - Updates the database with bay location and "Descargando" or "Cargando" status
+    - Continues tracking wait time with traffic light colors
+  </Step>
+</Steps>
+
+## Validation Rules
+
+The system enforces three validation rules before allowing bay assignment:
+
+### 1. Bay Availability
+
+<Check>
+  **Rule**: A bay must be unoccupied to accept a new truck.
+</Check>
+
+**Error Message**: "Bahía ocupada"
+
+**Solution**: Wait for the current truck to complete its operation and exit, or reassign the truck to a different bay.
+
+### 2. Truck Type Compatibility
+
+<Check>
+  **Rule**: The truck type must be in the bay's allowed truck list.
+</Check>
+
+Each bay accepts specific truck types:
+
+| Truck Type | Code | Compatible Bays |
+|------------|------|-----------------|
+| **Parihuelero** | P | All bays (b0.1, b0.2, b1-b5, b10, b12, b14) |
+| **Jumbo** | J | All except b10, b12 |
+| **Bi-tren** | B | All except b10, b12 |
+| **Tolva** | T | b0.1, b0.2, b1, b2 only |
+| **Otros** | O | All except b10, b12 |
+
+**Error Message**: "Tipo de camión no permitido"
+
+**Solution**: Select a bay that accepts the truck's type (see table above).
+
+<Warning>
+  Bays **b10** and **b12** are restricted to **Parihuelero (P)** trucks only.
+</Warning>
+
+### 3. Operation and Product Compatibility
+
+<Check>
+  **Rule**: The bay must support the truck's operation (Descarga/Carga) AND the specific product type.
+</Check>
+
+#### Discharge Operations (Descarga - D)
+
+| Bay Group | Products Accepted |
+|-----------|-------------------|
+| **b0.1, b0.2, b1, b2** | Fardos, Envases, CPC, PH, MIXD |
+| **b3, b4, b5** | PT (Producto Terminado), MIXD |
+| **b14** | PT, MIXD |
+| **b10, b12** | PT, PP (Polipropileno), MIXD |
+
+#### Charge Operations (Carga - C)
+
+| Bay Group | Products Accepted |
+|-----------|-------------------|
+| **b0.1, b0.2, b1, b2** | None (discharge only) |
+| **b3, b4, b5** | PP, PT, MIXC |
+| **b14** | PP, PT, MIXC, ENVLT (Envases Ligeros Terminados) |
+| **b10, b12** | PP, PT, MIXC |
+
+**Error Messages**: 
+- "Operación no permitida en esta bahía" - The bay doesn't support the operation type
+- "Producto no admitido en esta bahía" - The product is not compatible with the bay
+
+**Solution**: Choose a bay that supports both the operation and product type.
+
+<Info>
+  **MIXD** (Mixed Discharge) and **MIXC** (Mixed Charge) are wildcard product codes that match any bay supporting discharge or charge operations respectively.
+</Info>
+
+## Reassigning Trucks Between Bays
+
+You can move trucks between bays after initial assignment:
+
+<Steps>
+  <Step title="Drag from Occupied Bay">
+    Click and hold on the truck information inside the occupied bay (not the bay itself).
+  </Step>
+  
+  <Step title="Drop on Target Bay">
+    Drag to the destination bay and release. The same validation rules apply.
+  </Step>
+  
+  <Step title="Database Update">
+    The system automatically updates:
+    - Previous bay is marked as available
+    - New bay is marked as occupied
+    - `bahia_actual` field in database is updated
+    - A notification toast confirms the reassignment
+  </Step>
+</Steps>
+
+<Tip>
+  Use reassignment to optimize bay utilization when priorities change or incidents occur.
+</Tip>
+
+## Automatic vs. Manual Completion
+
+### Simulation Mode
+
+- Trucks **automatically** exit after 8 time units (8 seconds)
+- Exit time is added to shift statistics
+- No manual intervention required
+
+### Real Mode
+
+- Trucks require **manual completion** by clicking the "✅ Salida" button
+- This reflects real-world operations where operators confirm truck departures
+- See [Monitoring Operations](/guides/monitoring-operations) for exit workflow
+
+## Common Assignment Scenarios
+
+### Scenario 1: Parihuelero with Finished Product Discharge
+
+```
+Truck: Plate BFW-234, Type: Parihuelero (P)
+Operation: Descarga (⬇)
+Product: PT (Producto Terminado)
+
+✅ Compatible Bays: b3, b4, b5, b10, b12, b14
+❌ Incompatible: b0.1, b0.2, b1, b2 (don't accept PT discharge)
+
+Recommended: b3, b4, or b5 (no coordination required)
+```
+
+### Scenario 2: Tolva with Bales Discharge
+
+```
+Truck: Plate CTM-789, Type: Tolva (T)
+Operation: Descarga (⬇)
+Product: Fardos
+
+✅ Compatible Bays: b0.1, b0.2, b1, b2
+❌ Incompatible: b3-b5, b10, b12, b14 (Tolva not allowed)
+
+Recommended: b0.1 or b0.2 (side bays, good for Tolva access)
+```
+
+### Scenario 3: Bi-tren with Polypropylene Charge
+
+```
+Truck: Plate BHQ-456, Type: Bi-tren (B)
+Operation: Carga (⬆)
+Product: PP (Polipropileno)
+
+✅ Compatible Bays: b3, b4, b5, b14
+❌ Incompatible: b0.1, b0.2, b1, b2 (no charge operations)
+❌ Incompatible: b10, b12 (Bi-tren not allowed)
+
+Recommended: b3, b4, or b5
+```
+
+## Best Practices
+
+<AccordionGroup>
+  <Accordion title="Prioritize by Wait Time">
+    - Assign red-status trucks first to avoid SLA violations
+    - Use the "Priority Alert" panel to identify the longest-waiting truck
+    - Monitor the traffic light legend for threshold awareness
+  </Accordion>
+  
+  <Accordion title="Balance Bay Utilization">
+    - Distribute trucks across multiple bays when possible
+    - Avoid queuing multiple trucks for the same bay
+    - Consider geographic layout for efficient yard flow
+  </Accordion>
+  
+  <Accordion title="Reserve Special Bays">
+    - Use b10 and b12 only when necessary (coordination overhead)
+    - Save b14 for special cases (ENVLT products)
+    - Keep high-capacity bays (b3-b5) available for peak hours
+  </Accordion>
+  
+  <Accordion title="Use Help Mode for Training">
+    - Enable Help Mode when training new operators
+    - Practice assignments during low-traffic periods
+    - Review validation error messages to learn rules
+  </Accordion>
+</AccordionGroup>
+
+## Troubleshooting
+
+### Assignment Rejected Despite Correct Bay
+
+**Cause**: Bay may already be occupied by another user's assignment that hasn't refreshed yet.
+
+**Solution**: Wait 10 seconds for the next polling cycle and try again.
+
+### Truck Reappears in Queue After Assignment
+
+**Cause**: Database update failed due to connection issue.
+
+**Solution**: Check network connection and reassign the truck. Verify in the database that the `estado` field updated to "Descargando" or "Cargando".
+
+### Cannot Drag Truck Card
+
+**Cause**: Session may not be active.
+
+**Solution**: Verify the header shows "Detener" (stop) button. If it shows "Iniciar" (start), start a new session.
+
+## Next Steps
+
+<Card title="Monitoring Operations" icon="chart-line" href="/guides/monitoring-operations">
+  Learn how to track bay operations and complete truck exits
+</Card>

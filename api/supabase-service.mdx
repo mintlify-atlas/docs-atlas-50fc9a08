@@ -1,0 +1,177 @@
+---
+title: 'Supabase Service Overview'
+description: 'Complete API reference for Dashboard Backus Supabase data layer'
+icon: 'database'
+---
+
+## Introduction
+
+The `supabaseService.ts` module is the single source of truth for all data operations in Dashboard Backus. It provides a clean, type-safe interface to:
+
+- **SELECT** from Supabase views and tables (queue, dashboard panels)
+- **INSERT** incidents directly into the `incidencias` table
+- **UPDATE** trip records in `viajes_camiones` (bay assignment, status, departure time)
+- **Realtime** subscriptions via Postgres change events
+
+## Architecture
+
+All data flows through this service to ensure consistency and maintainability. The service integrates with:
+
+- **Tables**: `viajes_camiones`, `incidencias`, `usuarios`
+- **Views**: `vista_unidad_prioridad`, `vista_dashboard_turnos`, `vista_promedio_patio_neto`
+- **Types**: Defined in `src/types.ts` for full TypeScript safety
+
+## Environment Configuration
+
+Table and view names can be overridden via environment variables:
+
+```bash
+VITE_TABLE_VIAJES=viajes_camiones
+VITE_TABLE_INCIDENCIAS=incidencias
+VITE_VIEW_PRIORIDAD=vista_unidad_prioridad
+VITE_VIEW_TURNOS=vista_dashboard_turnos
+VITE_VIEW_PROMEDIO=vista_promedio_patio_neto
+```
+
+## Function Categories
+
+<CardGroup cols={2}>
+  <Card title="Queue Operations" icon="truck" href="./queue-operations">
+    Fetch and manage trucks in the queue
+  </Card>
+  <Card title="Incident Operations" icon="triangle-exclamation" href="./incident-operations">
+    Open, close, and query incidents
+  </Card>
+  <Card title="Trip Operations" icon="route" href="./trip-operations">
+    Update bay assignments and mark departures
+  </Card>
+  <Card title="Dashboard Panels" icon="chart-line">
+    Fetch priority units, shift counts, and average times
+  </Card>
+</CardGroup>
+
+## Core Types
+
+### UsuarioLogin
+
+Authenticated user object returned by `loginUsuario`.
+
+<ResponseField name="id" type="number" required>
+  User primary key
+</ResponseField>
+
+<ResponseField name="email" type="string" required>
+  User email address
+</ResponseField>
+
+<ResponseField name="rol" type="'admin' | 'cliente'" required>
+  User role for authorization
+</ResponseField>
+
+<ResponseField name="nombre" type="string | null" required>
+  User display name (may be null)
+</ResponseField>
+
+### IncidenciaRow
+
+Incident record structure.
+
+<ResponseField name="id_incidencia" type="number">
+  Primary key (auto-generated)
+</ResponseField>
+
+<ResponseField name="id_camion" type="number" required>
+  Foreign key to `viajes_camiones.id`
+</ResponseField>
+
+<ResponseField name="hora_inicio" type="string" required>
+  Start time in "HH:MM:SS" format (Postgres TIME)
+</ResponseField>
+
+<ResponseField name="hora_fin" type="string">
+  End time in "HH:MM:SS" format (null if incident is still open)
+</ResponseField>
+
+## Authentication
+
+See the `loginUsuario` function for MD5-based authentication against the `usuarios` table.
+
+<Card title="Authentication" icon="lock" href="#authentication">
+  Uses MD5 hashing (RFC 1321) to match PostgreSQL's `md5()` function
+</Card>
+
+## Error Handling
+
+All functions use a centralized error handler that:
+
+- Logs errors to the console with context
+- Returns `null`, `false`, or empty arrays on failure
+- Never throws exceptions (safe for UI consumption)
+
+```typescript
+function manejarError(contexto: string, error: unknown): null {
+  const msg = error instanceof Error ? error.message : String(error);
+  console.error(`[supabaseService] ${contexto}:`, msg);
+  return null;
+}
+```
+
+## Utility Functions
+
+### intervalAMinutos
+
+Converts PostgreSQL interval strings to minutes.
+
+<ParamField path="interval" type="string | null | undefined">
+  Postgres interval (e.g., "02:30:00", "1 day 02:30:00", "-01:15:00")
+</ParamField>
+
+<ResponseField name="return" type="number">
+  Total minutes (negative for intervals like night shift crossovers)
+</ResponseField>
+
+**Supported formats:**
+- `"HH:MM:SS"` - Standard format
+- `"HH:MM:SS.mmm"` - With milliseconds
+- `"-HH:MM:SS"` - Negative intervals
+- `"1 day 02:30:00"` - Multi-day intervals
+- `"HH:MM:SS+00"` - With timezone offset (stripped)
+
+```typescript
+import { intervalAMinutos } from './services/supabaseService';
+
+const minutes = intervalAMinutos("02:30:00"); // 150
+const negative = intervalAMinutos("-00:15:00"); // -15
+const multiDay = intervalAMinutos("1 day 12:00:00"); // 2160
+```
+
+### intervalATexto
+
+Formats PostgreSQL intervals as human-readable text.
+
+<ParamField path="interval" type="string | null | undefined">
+  Postgres interval
+</ParamField>
+
+<ResponseField name="return" type="string">
+  Formatted string ("Xh Ym", "Ym", or "< 1m")
+</ResponseField>
+
+```typescript
+import { intervalATexto } from './services/supabaseService';
+
+console.log(intervalATexto("02:30:00")); // "2h 30m"
+console.log(intervalATexto("00:45:00")); // "45m"
+console.log(intervalATexto("00:00:30")); // "< 1m"
+```
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Queue Operations" icon="truck" href="./queue-operations">
+    Learn how to fetch and manage the truck queue
+  </Card>
+  <Card title="Incident Operations" icon="triangle-exclamation" href="./incident-operations">
+    Understand incident lifecycle management
+  </Card>
+</CardGroup>

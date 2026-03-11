@@ -1,0 +1,363 @@
+---
+title: 'Trip Operations'
+description: 'API reference for updating trip records (bay assignments, status, departures)'
+icon: 'route'
+---
+
+## Overview
+
+Trip operations handle direct updates to the `viajes_camiones` table. These functions manage:
+
+- Bay assignments when trucks are dragged from queue to loading/unloading bays
+- Status changes ("En cola" → "Cargando" / "Descargando" → "Finalizado")
+- Departure time recording when trucks leave the facility
+
+## ID Handling Strategy
+
+Trip operations support two ID formats:
+
+1. **Numeric ID** (e.g., "42") - Uses the primary key `id` column
+2. **Custom ID** (e.g., "VJ-2024-001") - Uses the `id_viaje` column
+
+The service automatically detects the format and queries the appropriate column:
+
+```typescript
+function esIdNumerico(id_viaje: string): boolean {
+  const n = Number(id_viaje);
+  return !isNaN(n) && n > 0 && String(n) === id_viaje;
+}
+```
+
+## actualizarBahiaDirecto
+
+Updates a truck's bay assignment and status when moved from queue to a loading/unloading bay.
+
+```typescript
+export async function actualizarBahiaDirecto(
+  id_viaje: string,
+  bahia_actual: string,
+  estado: 'Cargando' | 'Descargando'
+): Promise<boolean>
+```
+
+### Parameters
+
+<ParamField path="id_viaje" type="string" required>
+  Trip identifier. Can be:
+  - Numeric string (e.g., "42") - queries by primary key `id`
+  - Custom string (e.g., "VJ-2024-001") - queries by `id_viaje` column
+</ParamField>
+
+<ParamField path="bahia_actual" type="string" required>
+  Bay identifier where the truck is assigned (e.g., "B1", "B2", "C-A").
+</ParamField>
+
+<ParamField path="estado" type="'Cargando' | 'Descargando'" required>
+  New status for the truck. Must be either "Cargando" (loading) or "Descargando" (unloading).
+</ParamField>
+
+### Return Value
+
+<ResponseField name="return" type="boolean">
+  `true` if the update succeeded, `false` if no rows were updated or an error occurred.
+</ResponseField>
+
+### Implementation Details
+
+The function performs a conditional UPDATE query:
+
+```typescript
+const payload = { bahia_actual, estado };
+const { data, error } = esIdNumerico(id_viaje)
+  ? await supabase.from('viajes_camiones').update(payload).eq('id', Number(id_viaje)).select('id')
+  : await supabase.from('viajes_camiones').update(payload).eq('id_viaje', id_viaje).select('id');
+```
+
+### Example Usage
+
+```typescript
+import { actualizarBahiaDirecto } from './services/supabaseService';
+
+// Assign truck to bay B1 for loading
+const success = await actualizarBahiaDirecto('42', 'B1', 'Cargando');
+
+if (success) {
+  console.log('Truck successfully assigned to bay B1');
+} else {
+  console.error('Failed to update bay assignment');
+}
+```
+
+### Real-world Example - Drag & Drop
+
+```typescript
+import { actualizarBahiaDirecto } from './services/supabaseService';
+import type { Camion } from './types';
+
+// Handle drag & drop from queue to bay
+async function handleDropToBay(
+  truck: Camion,
+  targetBayId: string,
+  operation: 'Cargando' | 'Descargando'
+) {
+  // Update database
+  const success = await actualizarBahiaDirecto(
+    truck.id_viaje,
+    targetBayId,
+    operation
+  );
+
+  if (!success) {
+    alert('Failed to assign truck to bay');
+    return;
+  }
+
+  // Update UI optimistically
+  setTruckBay(truck.id, targetBayId);
+  setTruckStatus(truck.id, operation);
+
+  console.log(`${truck.placa} → ${targetBayId} (${operation})`);
+}
+```
+
+### Query Examples
+
+**Numeric ID (uses primary key):**
+```sql
+UPDATE viajes_camiones
+SET bahia_actual = 'B1', estado = 'Cargando'
+WHERE id = 42
+RETURNING id;
+```
+
+**Custom ID (uses id_viaje column):**
+```sql
+UPDATE viajes_camiones
+SET bahia_actual = 'B1', estado = 'Cargando'
+WHERE id_viaje = 'VJ-2024-001'
+RETURNING id;
+```
+
+## marcarSalidaDirecto
+
+Marks a truck's departure by setting `hora_salida` and changing status to "Finalizado".
+
+```typescript
+export async function marcarSalidaDirecto(id_viaje: string): Promise<boolean>
+```
+
+### Parameters
+
+<ParamField path="id_viaje" type="string" required>
+  Trip identifier (numeric or custom format).
+</ParamField>
+
+### Return Value
+
+<ResponseField name="return" type="boolean">
+  `true` if the departure was recorded successfully, `false` otherwise.
+</ResponseField>
+
+### Implementation Details
+
+Captures the current time and updates the trip record:
+
+```typescript
+const horaActual = new Date().toLocaleTimeString('es-PE', { hour12: false });
+const payload = { estado: 'Finalizado', hora_salida: horaActual };
+
+const { data, error } = esIdNumerico(id_viaje)
+  ? await supabase.from('viajes_camiones').update(payload).eq('id', Number(id_viaje)).select('id')
+  : await supabase.from('viajes_camiones').update(payload).eq('id_viaje', id_viaje).select('id');
+```
+
+### Example Usage
+
+```typescript
+import { marcarSalidaDirecto } from './services/supabaseService';
+
+// Mark truck departure
+const success = await marcarSalidaDirecto('42');
+
+if (success) {
+  console.log('Truck departure recorded');
+} else {
+  console.error('Failed to record departure');
+}
+```
+
+### Real-world Example - Departure Button
+
+```typescript
+import { marcarSalidaDirecto, cerrarIncidencia } from './services/supabaseService';
+import type { Camion } from './types';
+
+// Handle truck departure workflow
+async function handleTruckDeparture(truck: Camion) {
+  // Close any open incidents first
+  const incident = await cerrarIncidencia(truck.id_db);
+  if (incident) {
+    console.log('Closed open incident before departure');
+  }
+
+  // Mark departure
+  const success = await marcarSalidaDirecto(truck.id_viaje);
+
+  if (!success) {
+    alert('Failed to record truck departure');
+    return;
+  }
+
+  // Update UI - remove from active bays
+  removeTruckFromBay(truck.id);
+  showSuccessMessage(`${truck.placa} departure recorded`);
+}
+```
+
+### Query Example
+
+```sql
+UPDATE viajes_camiones
+SET estado = 'Finalizado', hora_salida = '15:30:45'
+WHERE id = 42
+RETURNING id;
+```
+
+## Error Handling
+
+Both functions include comprehensive error handling:
+
+### Failed Updates (No Rows Affected)
+
+```typescript
+if (!data?.length) {
+  console.warn(
+    `[supabaseService] actualizarBahiaDirecto: ninguna fila actualizada para id_viaje="${id_viaje}"`
+  );
+  return false;
+}
+```
+
+### Database Errors
+
+```typescript
+if (error) { 
+  manejarError('actualizarBahiaDirecto', error); 
+  return false; 
+}
+```
+
+No exceptions are thrown, making these functions safe to use without try-catch blocks.
+
+## Common Patterns
+
+### Queue to Bay Assignment
+
+```typescript
+async function moveFromQueueToBay(truck: Camion, bayId: string) {
+  // Determine operation type from truck data
+  const operation = truck.operacionCodigo === 'C' ? 'Cargando' : 'Descargando';
+  
+  // Update database
+  const success = await actualizarBahiaDirecto(
+    truck.id_viaje,
+    bayId,
+    operation
+  );
+  
+  return success;
+}
+```
+
+### Bay to Bay Transfer
+
+```typescript
+async function transferBetweenBays(truck: Camion, newBayId: string) {
+  // Keep same operation status, just change bay
+  const currentStatus = truck.estadoAlerta === 'cargando' ? 'Cargando' : 'Descargando';
+  
+  const success = await actualizarBahiaDirecto(
+    truck.id_viaje,
+    newBayId,
+    currentStatus
+  );
+  
+  return success;
+}
+```
+
+### Complete Workflow
+
+```typescript
+async function completeTruckWorkflow(truck: Camion) {
+  // 1. Assign to bay
+  let success = await actualizarBahiaDirecto(
+    truck.id_viaje,
+    'B1',
+    'Cargando'
+  );
+  if (!success) return false;
+  
+  // 2. Wait for loading to complete...
+  await waitForLoadingComplete();
+  
+  // 3. Close any incidents
+  await cerrarIncidencia(truck.id_db);
+  
+  // 4. Mark departure
+  success = await marcarSalidaDirecto(truck.id_viaje);
+  return success;
+}
+```
+
+## Time Format
+
+The `hora_salida` field uses PostgreSQL TIME format:
+
+```typescript
+const horaActual = new Date().toLocaleTimeString('es-PE', { hour12: false });
+// Returns: "HH:mm:ss" (e.g., "15:30:45")
+```
+
+This format is compatible with the `hora_llegada` field for accurate duration calculations in database views.
+
+## Database Schema Reference
+
+Relevant columns in `viajes_camiones`:
+
+```sql
+CREATE TABLE viajes_camiones (
+  id SERIAL PRIMARY KEY,
+  id_viaje VARCHAR(50),
+  tracto VARCHAR(20),
+  estado VARCHAR(20) NOT NULL,
+  bahia_actual VARCHAR(10),
+  hora_llegada TIME NOT NULL,
+  hora_salida TIME,
+  operacion VARCHAR(20),
+  -- ... other columns
+);
+```
+
+## Status Flow
+
+The typical status progression:
+
+```
+"En cola" 
+  ↓ (actualizarBahiaDirecto)
+"Cargando" / "Descargando"
+  ↓ (marcarSalidaDirecto)
+"Finalizado"
+```
+
+## Related Operations
+
+<CardGroup cols={2}>
+  <Card title="Queue Operations" icon="truck" href="./queue-operations">
+    Fetch trucks before assigning to bays
+  </Card>
+  <Card title="Incident Operations" icon="triangle-exclamation" href="./incident-operations">
+    Manage incidents during loading/unloading
+  </Card>
+</CardGroup>

@@ -1,0 +1,389 @@
+---
+title: Monitoring Operations
+description: Track real-time metrics, manage truck exits, and identify operational bottlenecks
+---
+
+## Overview
+
+Monitoring operations in Dashboard Backus involves tracking real-time metrics across three key areas:
+- Individual truck status in bays
+- Aggregate performance panels
+- Shift-based statistics
+
+This guide covers how to interpret data, complete truck operations, and optimize yard throughput.
+
+## Real-Time Dashboard Panels
+
+Dashboard Backus displays three live data panels that update automatically every **15 seconds**:
+
+### Priority Alert Panel
+
+**Location**: Top right of yard map
+
+**Purpose**: Identifies the truck with the longest total wait time in the system.
+
+**Data Displayed**:
+- **Plate number** (e.g., "BFW-234") in large red text
+- **Elapsed time** badge showing time since arrival (e.g., "⏱ 2h 15m")
+- **Arrival time** (e.g., "🕐 Llegada: 08:30:00")
+- **Current location** (e.g., "📍 Bahía: Bahía 3" or "📍 Bahía: En cola")
+
+<Warning>
+  This panel shows trucks in **any** state except "Finalizado" - including both queue and in-bay trucks. Prioritize assignment or completion for the displayed truck.
+</Warning>
+
+**Data Source**: `vista_unidad_prioridad` view (Supabase)
+
+### Average Yard Time Panel
+
+**Location**: Left side, upper position
+
+**Purpose**: Displays the net average time trucks spend in the yard, excluding incident downtime.
+
+**Data Displayed**:
+- **Average time** in minutes (e.g., "45.3 min")
+- Calculation note: "promedio neto del día"
+- Green checkmark: "✓ incidencias descontadas"
+
+<Info>
+  This metric automatically subtracts incident duration from total yard time, providing accurate operational performance data.
+</Info>
+
+**Calculation**: 
+```
+Net Yard Time = (hora_salida - hora_llegada) - SUM(incident_durations)
+Average = MEAN(Net Yard Time) for all trucks with estado='Finalizado' today
+```
+
+**Data Source**: `vista_promedio_patio_neto` view (Supabase)
+
+### Shift Count Panel
+
+**Location**: Left side, lower position
+
+**Purpose**: Tracks the number of trucks processed during each shift.
+
+**Data Displayed**:
+
+| Shift | Time Range | Display |
+|-------|------------|----------|
+| **T1** | 07:00 - 15:00 | Turno 1 count |
+| **T2** | 15:01 - 23:00 | Turno 2 count |
+| **T3** | 23:01 - 06:59 | Turno 3 count |
+
+**Shift Assignment Logic** (from `SimuladorMapa.tsx:33-38`):
+```typescript
+const getTurnoActual = (): 1 | 2 | 3 => {
+  const h = new Date().getHours();
+  if (h >= 7  && h < 15) return 1;  // T1: 07:00-14:59
+  if (h >= 15 && h < 23) return 2;  // T2: 15:00-22:59
+  return 3;                          // T3: 23:00-06:59
+};
+```
+
+<Note>
+  Shift counts represent **finalized** trucks only (estado='Finalizado'). Trucks still in queue or in-bay are not included.
+</Note>
+
+**Data Source**: `vista_dashboard_turnos` view (Supabase)
+
+## Monitoring Trucks in Bays
+
+### Bay Status Indicators
+
+Each occupied bay displays comprehensive truck information:
+
+#### Visual Elements
+
+1. **Traffic Light Dot** (top right)
+   - 🟢 Green: Wait time < yellow threshold
+   - 🟡 Yellow: Wait time between yellow and red thresholds
+   - 🔴 Red: Wait time ≥ red threshold (pulsing animation)
+
+2. **Incident Alert** (next to traffic light)
+   - 🔴 Red pulsing dot: Active incident without closure time
+   - Only visible when `hora_fin IS NULL` in incidents table
+
+3. **Progress Bar** (below truck info)
+   - Visual representation of time spent relative to red threshold
+   - Color matches traffic light status
+   - Fills from 0% (arrival) to 100% (red threshold reached)
+
+#### Truck Information
+
+```
+┌─────────────────────────┐
+│ Bahía 3            🟢   │ ← Bay name + traffic light
+├─────────────────────────┤
+│       BFW-234           │ ← Plate (colored by traffic light)
+│     Parihuelero         │ ← Truck type
+│   ⬇ DESCARGANDO         │ ← Operation (⬇ discharge / ⬆ charge)
+│         PT              │ ← Product type
+│ ▓▓▓▓▓▓▓░░░░░░░░░░░░░░  │ ← Progress bar
+│      ⏱ 45m              │ ← Elapsed time (colored)
+│  [⚠️ Incid.] [✅ Salida] │ ← Action buttons (admin only)
+└─────────────────────────┘
+```
+
+### Polling and Updates
+
+The system uses HTTP polling (no WebSockets) for data updates:
+
+| Data Type | Polling Interval | Source |
+|-----------|-----------------|--------|
+| Queue trucks | 10 seconds | `fetchCamionesCola()` |
+| Dashboard panels | 15 seconds | `fetchUnidadPrioridad()`, `fetchDashboardTurnos()`, `fetchPromedioPatioNeto()` |
+| Incident status | 8 seconds | `fetchIncidenciaAbierta()` (per bay) |
+| Traffic light colors | 1 second | Local calculation based on `tiempoLlegadaCola` |
+
+<Tip>
+  Brief data delays (up to 15 seconds) are normal. The system prioritizes database performance over instant updates.
+</Tip>
+
+## Completing Truck Operations
+
+### Manual Exit Workflow (Real Mode)
+
+<Steps>
+  <Step title="Verify Operation Complete">
+    Confirm with yard staff that the truck has finished loading/unloading and is ready to exit.
+  </Step>
+  
+  <Step title="Click '✅ Salida' Button">
+    Located at the bottom right of the occupied bay card.
+    
+    <Note>
+      This button is only visible to **Admin** users. Client users cannot trigger exits.
+    </Note>
+  </Step>
+  
+  <Step title="Confirm Exit">
+    A confirmation dialog appears:
+    ```
+    ¿Confirmar salida de BFW-234?
+    [Aceptar] [Cancelar]
+    ```
+    Click **Aceptar** to proceed.
+  </Step>
+  
+  <Step title="Database Update">
+    The system performs the following operations:
+    
+    1. Calculates net yard time: `(now - tiempoEntradaPatio) / 60000` minutes
+    2. Determines current shift (T1/T2/T3) based on system time
+    3. Calls `marcarSalidaDirecto(id_viaje)` to update Supabase:
+       ```sql
+       UPDATE viajes_camiones
+       SET estado = 'Finalizado',
+           hora_salida = CURRENT_TIME
+       WHERE id_viaje = '...';
+       ```
+    4. Removes truck from bay UI
+    5. Increments shift counter in session stats
+    6. Adds net time to average calculation
+    
+    <Check>
+      Success toast: "✅ Salida registrada: BFW-234"
+    </Check>
+    
+    <Warning>
+      Error toast: "❌ Error al registrar salida de BFW-234" - Check network connection and retry
+    </Warning>
+  </Step>
+</Steps>
+
+### Automatic Exit (Simulation Mode)
+
+In simulation mode, trucks automatically exit after **8 time units** (8 seconds):
+
+- No manual intervention required
+- Same database update process as manual exit
+- Toast notification: "✅ Finalizado (auto): BFW-234"
+- Useful for testing and training scenarios
+
+## Identifying Bottlenecks
+
+### High Wait Times
+
+**Symptom**: Multiple trucks in red status or Priority Alert panel shows time > 2 hours
+
+**Possible Causes**:
+- Insufficient available bays for demand
+- Truck types don't match available bay compatibility
+- Incidents causing delays in bay turnover
+
+**Solutions**:
+1. Review queue for compatible bay assignments
+2. Consider reassigning trucks to optimize bay usage
+3. Coordinate with yard staff to expedite current operations
+4. Check for open incidents that should be closed
+
+### Low Shift Counts
+
+**Symptom**: Shift count significantly below target (e.g., < 20 trucks per shift)
+
+**Possible Causes**:
+- Long average yard times
+- Frequent incidents not being resolved
+- Trucks waiting in queue without assignment
+
+**Solutions**:
+1. Review Average Yard Time panel for trends
+2. Analyze incident frequency and duration
+3. Ensure operators are actively assigning queued trucks
+4. Check for bay utilization imbalances
+
+### Rising Average Yard Time
+
+**Symptom**: Average Yard Time panel shows increasing minutes over time
+
+**Possible Causes**:
+- Operational inefficiencies at bays
+- Increased incident frequency
+- Complex product types requiring longer processing
+
+**Solutions**:
+1. Generate detailed report to identify trends (see [Reports](/guides/reports))
+2. Review incident logs for patterns
+3. Consider bay reassignments to match truck types with optimal bays
+4. Coordinate with operations team for process improvements
+
+## Traffic Light Monitoring
+
+### Understanding Color Transitions
+
+Trucks transition through traffic light colors based on cumulative wait time:
+
+```
+🟢 GREEN (0 - 59 min)     Normal priority
+           ↓ (60 minutes elapsed)
+🟡 YELLOW (60 - 119 min)  Elevated priority
+           ↓ (120 minutes elapsed)
+🔴 RED (120+ min)         Critical priority - immediate action required
+```
+
+<Warning>
+  The `maxAlertaReached` property tracks the highest traffic light color a truck has reached. This value persists even if wait time decreases (e.g., during an incident).
+</Warning>
+
+### Configuring Thresholds
+
+**Admin Users**:
+- Yellow threshold: Configurable at session start (default: 60 units)
+- Red threshold: Configurable at session start (default: 120 units)
+- Units = minutes in Real mode, seconds in Simulation mode
+
+**Client Users**:
+- Yellow threshold: Fixed at 60 minutes (not configurable)
+- Red threshold: Fixed at 120 minutes (not configurable)
+- Only Real mode available
+
+## Performance Metrics
+
+### Key Performance Indicators (KPIs)
+
+<CardGroup cols={2}>
+  <Card title="Average Yard Time" icon="clock">
+    **Target**: < 45 minutes
+    
+    **Calculation**: Net time (excluding incidents)
+    
+    **Impact**: Lower times indicate efficient operations
+  </Card>
+  
+  <Card title="Trucks in Red Status" icon="triangle-exclamation">
+    **Target**: 0 trucks
+    
+    **Calculation**: Count of trucks with wait time ≥ red threshold
+    
+    **Impact**: Direct indicator of service level violations
+  </Card>
+  
+  <Card title="Shift Throughput" icon="truck-fast">
+    **Target**: Varies by shift (typically 25-40 trucks)
+    
+    **Calculation**: Count of finalized trucks per 8-hour shift
+    
+    **Impact**: Measures overall yard capacity utilization
+  </Card>
+  
+  <Card title="Incident Rate" icon="exclamation-triangle">
+    **Target**: < 10% of trucks
+    
+    **Calculation**: (Trucks with incidents / Total trucks) × 100
+    
+    **Impact**: Indicates operational quality and process stability
+  </Card>
+</CardGroup>
+
+### Monitoring Best Practices
+
+<AccordionGroup>
+  <Accordion title="Check Panels Every 5 Minutes">
+    - Review Priority Alert panel for critical trucks
+    - Monitor Average Yard Time for upward trends
+    - Compare shift counts to targets
+  </Accordion>
+  
+  <Accordion title="Proactive Queue Management">
+    - Assign trucks before they reach yellow status
+    - Keep queue length below 10 trucks when possible
+    - Balance assignments across all available bays
+  </Accordion>
+  
+  <Accordion title="Incident Response">
+    - Close incidents immediately after resolution
+    - Track trucks with open incidents for expedited processing
+    - Avoid assigning new trucks to bays with active incidents
+  </Accordion>
+  
+  <Accordion title="Shift Handoff Protocol">
+    - Generate session report before shift end
+    - Brief incoming shift on Priority Alert trucks
+    - Document any ongoing incidents or special cases
+  </Accordion>
+</AccordionGroup>
+
+## Troubleshooting
+
+### Panel Data Not Updating
+
+**Symptom**: Dashboard panels show stale data or "Sin unidades en cola"
+
+**Solution**:
+1. Check that session is active (header shows "Detener")
+2. Verify network connection to Supabase
+3. Wait 15 seconds for next polling cycle
+4. If issue persists, stop and restart session
+
+### Traffic Light Colors Incorrect
+
+**Symptom**: Truck shows green despite long wait time
+
+**Solution**:
+1. Verify session mode (Real vs Simulation)
+2. Check configured thresholds in session settings
+3. Confirm `tiempoLlegadaCola` is set correctly in truck data
+4. Review browser console for calculation errors
+
+### Exit Button Not Responding
+
+**Symptom**: Clicking "✅ Salida" shows loading spinner but doesn't complete
+
+**Solution**:
+1. Check network tab in browser DevTools for failed requests
+2. Verify truck has valid `id_viaje` in database
+3. Ensure no duplicate exit requests in progress (button disabled during processing)
+4. Retry after 5 seconds - may be temporary connection issue
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Handling Incidents" icon="triangle-exclamation" href="/guides/handling-incidents">
+    Learn how to register and manage incidents that affect processing times
+  </Card>
+  
+  <Card title="Generating Reports" icon="file-chart-column" href="/guides/reports">
+    Access detailed session reports and performance analytics
+  </Card>
+</CardGroup>

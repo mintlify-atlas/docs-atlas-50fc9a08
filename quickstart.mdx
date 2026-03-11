@@ -1,80 +1,323 @@
 ---
-title: "Quickstart"
-description: "Start building awesome documentation in minutes"
+title: 'Quickstart'
+description: 'Get up and running with Dashboard Backus in under 5 minutes'
 ---
 
-## Get started in three steps
+## Welcome to Dashboard Backus
 
-Get your documentation site running locally and make your first customization.
-
-### Step 1: Set up your local environment
-
-<AccordionGroup>
-  <Accordion icon="copy" title="Clone your docs locally">
-    During the onboarding process, you created a GitHub repository with your docs content if you didn't already have one. You can find a link to this repository in your [dashboard](https://dashboard.mintlify.com).
-    
-    To clone the repository locally so that you can make and preview changes to your docs, follow the [Cloning a repository](https://docs.github.com/en/repositories/creating-and-managing-repositories/cloning-a-repository) guide in the GitHub docs.
-  </Accordion>
-  <Accordion icon="rectangle-terminal" title="Start the preview server">
-    1. Install the Mintlify CLI: `npm i -g mint`
-    2. Navigate to your docs directory and run: `mint dev`
-    3. Open `http://localhost:3000` to see your docs live!
-    
-    <Tip>Your preview updates automatically as you edit files.</Tip>
-  </Accordion>
-</AccordionGroup>
-
-### Step 2: Deploy your changes
-
-<AccordionGroup>
-  <Accordion icon="github" title="Install our GitHub app">
-    Install the Mintlify GitHub app from your [dashboard](https://dashboard.mintlify.com/settings/organization/github-app).
-    
-    Our GitHub app automatically deploys your changes to your docs site, so you don't need to manage deployments yourself.
-</Accordion>
-<Accordion icon="palette" title="Update your site name and colors">
-    For a first change, let's update the name and colors of your docs site.
-
-    1. Open `docs.json` in your editor.
-    2. Change the `"name"` field to your project name.
-    3. Update the `"colors"` to match your brand.
-    4. Save and see your changes instantly at `http://localhost:3000`.
-
-    <Tip>Try changing the primary color to see an immediate difference!</Tip>
-  </Accordion>
-</AccordionGroup>
-
-### Step 3: Go live
-
-<Accordion icon="rocket" title="Publish your docs">
-  1. Commit and push your changes.
-  2. Your docs will update and be live in moments!
-</Accordion>
-
-## Next steps
-
-Now that you have your docs running, explore these key features:
-
-<CardGroup cols={2}>
-
-<Card title="Write Content" icon="pen-to-square" href="/essentials/markdown">
-  Learn MDX syntax and start writing your documentation.
-</Card>
-
-<Card title="Customize style" icon="palette" href="/essentials/settings">
-  Make your docs match your brand perfectly.
-</Card>
-
-<Card title="Add code examples" icon="square-code" href="/essentials/code">
-  Include syntax-highlighted code blocks.
-</Card>
-
-<Card title="API documentation" icon="code" href="/api-reference/introduction">
-  Auto-generate API docs from OpenAPI specs.
-</Card>
-
-</CardGroup>
+Dashboard Backus is a real-time truck management system designed for Backus plant yard operations. This quickstart guide will walk you through logging in and starting your first simulation session.
 
 <Note>
-  **Need help?** See our [full documentation](https://mintlify.com/docs) or join our [community](https://mintlify.com/community).
+  This application uses **Supabase** for authentication and real-time data synchronization. Make sure you have valid credentials before proceeding.
 </Note>
+
+## Prerequisites
+
+Before you begin, ensure you have:
+
+- A valid Backus email account (`correo@backus.com`)
+- Your assigned password/PIN
+- One of the following user roles:
+  - **Admin** (👑 Administrador) — Full access to configure traffic light timers
+  - **Client** (👁 Cliente) — Monitoring view with fixed timers
+
+## Login Flow
+
+<Steps>
+  <Step title="Access the Login Screen">
+    When you first open Dashboard Backus, you'll be greeted with the login modal. The interface displays the Backus logo and a clean authentication form.
+
+    ```tsx
+    // src/Componentes/ModalLogin.tsx
+    const ModalLogin = ({ onLogin }: Props) => {
+      const [email, setEmail] = useState('');
+      const [pin, setPin] = useState('');
+      // ...
+    }
+    ```
+  </Step>
+
+  <Step title="Enter Your Credentials">
+    Fill in your email and password:
+
+    - **Email**: Your Backus company email
+    - **Password**: Your assigned PIN (max 50 characters)
+
+    <Info>
+      The system uses MD5 hashing to securely verify your credentials against the Supabase `usuarios` table.
+    </Info>
+
+    ```typescript
+    // Authentication happens in src/services/supabaseService.ts
+    export async function loginUsuario(
+      email: string,
+      password: string
+    ): Promise<UsuarioLogin | null> {
+      const pinHash = md5Hex(password);
+      
+      const { data, error } = await supabase
+        .from('usuarios')
+        .select('id, email, rol, nombre')
+        .eq('email', email.trim().toLowerCase())
+        .eq('pin', pinHash)
+        .eq('activo', true)
+        .maybeSingle();
+      // ...
+    }
+    ```
+  </Step>
+
+  <Step title="Successful Login">
+    Upon successful authentication, you'll be redirected to the main dashboard based on your role:
+
+    ```typescript
+    // src/App.tsx
+    function App() {
+      const [usuario, setUsuario] = useState<UsuarioLogin | null>(null);
+
+      if (!usuario) {
+        return <ModalLogin onLogin={(_, u) => setUsuario(u)} />;
+      }
+
+      return (
+        <SimuladorMapa
+          rolInicial={usuario.rol as Rol}
+          nombreUsuario={usuario.nombre ?? usuario.email}
+          onLogout={() => setUsuario(null)}
+        />
+      );
+    }
+    ```
+
+    <Tip>
+      Your role determines what features you can access. Admins can modify traffic light timers, while clients have read-only access.
+    </Tip>
+  </Step>
+</Steps>
+
+## Your First Simulation Session
+
+Once logged in, you'll see the main **SimuladorMapa** interface with three key sections:
+
+### 1. Header (Top Section)
+
+Displays:
+- Current user name and role
+- Dark mode toggle
+- Help mode button
+- Configuration access (Admin only)
+- Logout button
+
+### 2. Interactive Map (Center)
+
+The satellite view of the Backus plant yard with:
+
+- **Truck Queue** (bottom): Cards showing trucks waiting to be assigned
+- **Bay Overlays**: Mapped locations where trucks can be placed via drag & drop
+- **Central Dashboard Panels**: Three floating panels showing real-time metrics
+
+<CodeGroup>
+```typescript Truck Types
+// src/types.ts
+export type TipoCamion = 'P' | 'J' | 'B' | 'T' | 'O';
+// P = Parihuelero/Pariholero
+// J = Jumbo
+// B = Bi-tren/Bitren
+// T = Tolva
+// O = Other
+```
+
+```typescript Operation Types
+export type OperacionCodigo = 'C' | 'D';
+// C = Carga (Loading)
+// D = Descarga (Unloading)
+```
+</CodeGroup>
+
+### 3. Real-Time Dashboard Panels
+
+Three central panels display critical metrics:
+
+#### Panel 1: Priority Unit
+Shows the truck with the longest wait time
+
+```typescript
+// Fetched from vista_unidad_prioridad view
+export interface VwUnidadPrioridad {
+  tracto: string;              // Truck plate
+  hora_llegada: string;        // "HH:MM:SS"
+  bahia_actual: string | null; // Current bay
+  tiempo_transcurrido: string; // "HH:MM:SS+00"
+}
+```
+
+#### Panel 2: Shift Count
+Units attended per shift (T1: 07:00-15:00, T2: 15:00-23:00, T3: 23:00-07:00)
+
+```typescript
+// Fetched from vista_dashboard_turnos view
+export interface VwDashboardTurnos {
+  fecha: string;   // "YYYY-MM-DD"
+  turno_1: number; // 07:00–15:00
+  turno_2: number; // 15:01–23:00
+  turno_3: number; // 23:01–06:59
+}
+```
+
+#### Panel 3: Average Net Time
+Average time trucks spend in the yard (excluding incident time)
+
+```typescript
+// Fetched from vista_promedio_patio_neto view
+export interface VwPromedioPatioNeto {
+  promedio_neto_patio: string | null; // "HH:MM:SS"
+}
+```
+
+## Traffic Light System
+
+Trucks in the queue display color-coded alerts based on wait time:
+
+<Steps>
+  <Step title="Green (Verde)">
+    ✅ **Normal** — Wait time ≤ 60 minutes (default for clients)
+  </Step>
+  
+  <Step title="Yellow (Amarillo)">
+    ⚠️ **Warning** — Wait time 61-120 minutes (configurable by admin)
+  </Step>
+  
+  <Step title="Red (Rojo)">
+    🚨 **Critical** — Wait time ≥ 121 minutes (configurable by admin)
+  </Step>
+</Steps>
+
+```typescript
+// src/Componentes/SimuladorMapa.tsx
+const TIEMPOS_CLIENTE = { 
+  tiempoAmarillo: 60,  // Yellow threshold in minutes
+  tiempoRojo: 120      // Red threshold in minutes
+} as const;
+```
+
+## Drag & Drop Operations
+
+### Assigning a Truck to a Bay
+
+1. Click and drag a truck card from the bottom queue
+2. Drop it onto a compatible bay overlay on the map
+3. The system automatically:
+   - Updates `bahia_actual` in the database
+   - Sets `estado` to "Cargando" or "Descargando"
+   - Triggers real-time updates across all connected clients
+
+```typescript
+// src/services/supabaseService.ts
+export async function actualizarBahiaDirecto(
+  id_viaje: string,
+  bahia_actual: string,
+  estado: 'Cargando' | 'Descargando'
+): Promise<boolean> {
+  const payload = { bahia_actual, estado };
+  const { data, error } = esIdNumerico(id_viaje)
+    ? await supabase.from('viajes_camiones').update(payload).eq('id', Number(id_viaje))
+    : await supabase.from('viajes_camiones').update(payload).eq('id_viaje', id_viaje);
+  // ...
+}
+```
+
+### Marking a Truck as Complete
+
+Click the "Marcar Salida" (Mark Exit) button on a truck card to:
+- Record the exit time (`hora_salida`)
+- Change status to "Finalizado" (Completed)
+- Remove the truck from active monitoring
+
+```typescript
+export async function marcarSalidaDirecto(id_viaje: string): Promise<boolean> {
+  const horaActual = new Date().toLocaleTimeString('es-PE', { hour12: false });
+  const payload = { estado: 'Finalizado', hora_salida: horaActual };
+  // ...
+}
+```
+
+## Managing Incidents
+
+The incident system allows you to track delays and bottlenecks:
+
+<Warning>
+  Maximum of **3 incidents per truck**. A 4th incident triggers a critical alert to developers.
+</Warning>
+
+### Opening an Incident
+
+```typescript
+// src/services/supabaseService.ts
+export async function abrirIncidencia(id_camion: number): Promise<IncidenciaRow | null> {
+  const { data, error } = await supabase
+    .from('incidencias')
+    .insert({
+      id_camion,
+      hora_inicio: horaActualTime(), // Current time as "HH:MM:SS"
+      hora_fin: null,
+    })
+    .select()
+    .maybeSingle();
+  // ...
+}
+```
+
+### Closing an Incident
+
+```typescript
+export async function cerrarIncidencia(id_camion: number): Promise<IncidenciaRow | null> {
+  const { data, error } = await supabase
+    .from('incidencias')
+    .update({ hora_fin: horaActualTime() })
+    .eq('id_camion', id_camion)
+    .is('hora_fin', null)
+    .select()
+    .maybeSingle();
+  // ...
+}
+```
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Installation Guide" icon="download" href="/installation">
+    Set up Dashboard Backus locally for development
+  </Card>
+  
+  <Card title="Configuration" icon="gear" href="/configuration">
+    Learn about environment variables and Supabase setup
+  </Card>
+  
+  <Card title="API Reference" icon="code" href="/api-reference">
+    Explore all available functions and types
+  </Card>
+  
+  <Card title="Bay Configuration" icon="map" href="/bay-config">
+    Customize bay locations and truck compatibility
+  </Card>
+</CardGroup>
+
+## Troubleshooting
+
+### Login Failed
+
+- Verify your email is lowercase and properly formatted
+- Ensure your account is marked as `activo: true` in the database
+- Check that your password matches the MD5 hash in Supabase
+
+### Trucks Not Loading
+
+- Confirm your `.env` file has valid Supabase credentials
+- Check browser console for connection errors
+- Verify the `viajes_camiones` table has rows with `estado = 'En cola'`
+
+### Real-Time Updates Not Working
+
+- Ensure Supabase Realtime is enabled for your tables
+- Check that your Supabase project has sufficient quota
+- Verify Row Level Security (RLS) policies allow reads

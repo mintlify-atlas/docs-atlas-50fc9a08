@@ -1,0 +1,298 @@
+---
+title: Bay Configuration
+description: Configure bay positions, truck types, and task assignments for the interactive map
+---
+
+The bay configuration defines the physical layout of loading/unloading bays on the satellite map, including which truck types are permitted and what tasks can be performed.
+
+## Configuration File
+
+Bay settings are stored in `src/Componentes/bahiasConfig.ts`. This file is separated from React components to comply with `react-refresh/only-export-components` linting rules.
+
+## Bay Schema
+
+Each bay is defined with the following properties:
+
+```typescript
+interface BahiaConfig {
+  nombre: string;                    // Display name (e.g., "Bahía 1")
+  camionesPermitidos: TipoCamion[];  // Allowed truck types
+  tareas: {                          // Allowed tasks by operation
+    D: string[];                     // Descarga (Unload) tasks
+    C: string[];                     // Carga (Load) tasks
+  };
+  alerta?: string;                   // Optional warning message
+  posX: number;                      // X position as % of map width
+  posY: number;                      // Y position as % of map height
+}
+```
+
+## Truck Type Codes
+
+The system uses single-letter codes for truck types:
+
+<ParamField path="P" type="TipoCamion">
+  **Parihuelero** - Standard pallet truck
+</ParamField>
+
+<ParamField path="J" type="TipoCamion">
+  **Jumbo** - Extra-large capacity truck
+</ParamField>
+
+<ParamField path="B" type="TipoCamion">
+  **Bi-tren** - Double-trailer configuration
+</ParamField>
+
+<ParamField path="T" type="TipoCamion">
+  **Tolva** - Dump truck / bulk carrier
+</ParamField>
+
+<ParamField path="O" type="TipoCamion">
+  **Otros** - Other truck types not matching above categories
+</ParamField>
+
+See `src/Componentes/bahiasConfig.ts:25-27` for the full name mapping.
+
+## Product/Task Types
+
+### Unloading Tasks (Descarga)
+- `Fardos` - Bales
+- `Envases` - Containers
+- `CPC` - Corrugated cardboard boxes
+- `PH` - Pallets
+- `PT` - Finished product
+- `PP` - Packaging product
+- `MIXD` - Mixed unload
+
+### Loading Tasks (Carga)
+- `PP` - Packaging product
+- `PT` - Finished product  
+- `ENVLT` - Empty containers
+- `MIXC` - Mixed load
+
+## Bay Definitions
+
+Here are the 10 configured bays from `src/Componentes/bahiasConfig.ts:11-22`:
+
+### Bay 0.1 & 0.2
+
+```typescript
+'b0.1': {
+  nombre: 'Bahía 0.1',
+  camionesPermitidos: ['P','J','B','T','O'],
+  tareas: { 
+    D: ['Fardos','Envases','CPC','PH','MIXD'], 
+    C: [] 
+  },
+  posX: 2.92,
+  posY: 31.38
+}
+```
+
+**Characteristics:**
+- Accept all truck types
+- Unload only (no loading operations)
+- Handle packaging materials and mixed unloading
+
+### Bays 1 & 2
+
+```typescript
+'b1': {
+  nombre: 'Bahía 1',
+  camionesPermitidos: ['P','J','B','T','O'],
+  tareas: { 
+    D: ['Fardos','Envases','CPC','PH','MIXD'], 
+    C: [] 
+  },
+  posX: 2.45,
+  posY: 5.69
+}
+```
+
+**Characteristics:**
+- Same configuration as Bay 0.1/0.2
+- Positioned at top of facility
+
+### Bays 3, 4, 5
+
+```typescript
+'b3': {
+  nombre: 'Bahía 3',
+  camionesPermitidos: ['P','J','B','O'],
+  tareas: { 
+    D: ['PT','MIXD'], 
+    C: ['PP','PT','MIXC'] 
+  },
+  posX: 24.03,
+  posY: 5.69
+}
+```
+
+**Characteristics:**
+- No tolva trucks (T)
+- Bidirectional operations (load and unload)
+- Handle finished products and packaging
+
+### Bay 14
+
+```typescript
+'b14': {
+  nombre: 'Bahía 14',
+  camionesPermitidos: ['P','J','B','O'],
+  tareas: { 
+    D: ['PT','MIXD'], 
+    C: ['PP','PT','MIXC','ENVLT'] 
+  },
+  posX: 58.91,
+  posY: 26.21
+}
+```
+
+**Characteristics:**
+- Includes empty container loading (ENVLT)
+- Central position on map
+
+### Bays 10 & 12 (Coordination Required)
+
+```typescript
+'b10': {
+  nombre: 'Bahía 10',
+  camionesPermitidos: ['P'],
+  tareas: { 
+    D: ['PT','PP','MIXD'], 
+    C: ['PP','PT','MIXC'] 
+  },
+  alerta: '¡ATENCIÓN! Coordina con T2.',
+  posX: 76.81,
+  posY: 33.62
+}
+```
+
+**Characteristics:**
+- Parihuelero trucks only
+- Requires coordination with Terminal 2 (T2)
+- Displays warning alert when truck is dragged to this bay
+
+## Position Coordinates
+
+Bay positions are specified as percentages of the reference map dimensions:
+
+- **Reference**: Satellite image at 1061×580px
+- **posX**: Percentage from left edge (0-100)
+- **posY**: Percentage from top edge (0-100)
+
+**Example:**
+```typescript
+posX: 76.81  // 81.44px from left (76.81% of 1061px)
+posY: 33.62  // 195px from top (33.62% of 580px)
+```
+
+The frontend converts these to absolute pixel positions based on the actual rendered map size.
+
+## Alert Colors
+
+The system uses a semaphore color scheme to indicate time in yard (see `src/Componentes/bahiasConfig.ts:30-34`):
+
+```typescript
+function getColorEstado(estado: EstadoAlerta): string {
+  if (estado === 'rojo')     return '#ef4444';  // Red
+  if (estado === 'amarillo') return '#eab308';  // Yellow
+  return '#22c55e';                             // Green
+}
+```
+
+**Thresholds:**
+- **Green** (#22c55e): ≤ 60 minutes
+- **Yellow** (#eab308): 61-120 minutes
+- **Red** (#ef4444): ≥ 121 minutes
+
+Admins can modify these thresholds; clients view them as read-only.
+
+## Drag & Drop Validation
+
+When a user drags a truck card to a bay, the system validates:
+
+1. **Truck Type**: Is the truck's `tipoCodigo` in `camionesPermitidos`?
+2. **Operation**: Does the bay support the truck's operation (C or D)?
+3. **Product**: Is the truck's product in the bay's task list?
+
+If validation fails, the drop is rejected and the truck snaps back to the queue.
+
+**Help Mode:**
+Clicking the help button highlights compatible bays in green for the selected truck.
+
+## Customization
+
+To add or modify bays:
+
+<Steps>
+  <Step title="Edit bahiasConfig.ts">
+    Open `src/Componentes/bahiasConfig.ts`
+  </Step>
+  
+  <Step title="Add Bay Entry">
+    Add a new entry to the `BAHIAS_CONFIG` object:
+    ```typescript
+    'b15': {
+      nombre: 'Bahía 15',
+      camionesPermitidos: ['P','J'],
+      tareas: { D: ['Fardos'], C: ['PT'] },
+      posX: 50.0,
+      posY: 50.0
+    }
+    ```
+  </Step>
+  
+  <Step title="Update Map Image">
+    If the physical layout changed, update the satellite map image in `public/`
+  </Step>
+  
+  <Step title="Test Validation">
+    Enable help mode and verify the new bay highlights correctly for different truck types
+  </Step>
+</Steps>
+
+<Warning>
+  Bay IDs (e.g., 'b15') must match the `bahia_actual` values stored in the `viajes_camiones` table. Update existing records if renaming bays.
+</Warning>
+
+## Database Integration
+
+When a truck is dropped on a bay:
+
+1. Frontend updates local state immediately (optimistic update)
+2. `actualizarBahiaDirecto()` is called (see `src/services/supabaseService.ts:318-334`)
+3. Database updates:
+   ```sql
+   UPDATE viajes_camiones 
+   SET bahia_actual = 'b3', estado = 'Descargando'
+   WHERE id_viaje = 'VJ-2024-001'
+   ```
+4. Realtime subscription notifies all connected clients
+5. Other users see the truck move to the bay instantly
+
+## Type Mapping
+
+The database stores truck types as full Spanish text (e.g., "parihuelero"), but the frontend uses codes. Mapping logic is in `src/services/supabaseService.ts:53-62`:
+
+```typescript
+const TIPO_MAP: Record<string, TipoCamion> = {
+  parihuelero: 'P', pariholero: 'P', 'pari-holero': 'P',
+  jumbo: 'J',
+  'bi-tren': 'B', bitren: 'B',
+  tolva: 'T',
+};
+```
+
+Any unrecognized type defaults to 'O' (Otros).
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Database Schema" icon="database" href="/configuration/database">
+    Understand the viajes_camiones table structure
+  </Card>
+  <Card title="Webhooks" icon="webhook" href="/configuration/webhooks">
+    Configure n8n automation for bay updates
+  </Card>
+</CardGroup>

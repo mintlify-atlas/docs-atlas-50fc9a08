@@ -1,0 +1,416 @@
+---
+title: "TarjetaCamion"
+description: "Draggable truck card component for the queue footer with real-time status updates and traffic light indicators"
+---
+
+## Overview
+
+`TarjetaCamion` displays individual truck information in the queue footer. It provides a draggable card interface with real-time wait time updates, traffic light status indicators, incident badges, and shift labels.
+
+**Key Features:**
+- Draggable with visual feedback (hover scale, cursor changes)
+- Real-time elapsed time ticker
+- Traffic light color-coded borders and status dots
+- Incident warning badge
+- Shift badge display
+- Responsive font sizing with clamp()
+
+## Component Props
+
+<ParamField path="camion" type="Camion" required>
+  Truck data object containing all display information
+  
+  ```typescript
+  interface Camion {
+    id: string;
+    id_viaje: string;
+    id_db?: string;
+    placa: string;
+    tipoCodigo: TipoCamion;           // 'TR', 'SP', 'TQ', etc.
+    operacionCodigo: 'C' | 'D';       // Carga/Descarga
+    producto: string;
+    propietario: string;              // Company name
+    fecha: string;
+    hora?: string;
+    turno?: 1 | 2 | 3;
+    tiempoLlegadaCola: number;        // Timestamp (ms)
+    tiempoEntradaPatio: number;       // Timestamp (ms)
+    estadoAlerta: EstadoAlerta;       // 'verde' | 'amarillo' | 'rojo'
+    maxAlertaReached: EstadoAlerta;
+    bahiaActual?: string;
+    incidencias?: number;             // Count of active incidents
+  }
+  ```
+</ParamField>
+
+<ParamField path="simulacionActiva" type="boolean" required>
+  Whether simulation is running. Disables dragging when `false`
+</ParamField>
+
+<ParamField path="config" type="ConfigSimulador" required>
+  Global configuration for time mode and thresholds
+</ParamField>
+
+<ParamField path="formatTiempo" type="(ms: number, modo: ConfigSimulador['modo']) => string" required>
+  Time formatting function
+  
+  **Example implementation:**
+  ```typescript
+  const formatTiempo = (ms: number, modo: 'simulacion' | 'real') => {
+    if (modo === 'real') {
+      const min = Math.floor(ms / 60_000);
+      const h = Math.floor(min / 60);
+      const m = min % 60;
+      return h > 0 ? `${h}h ${m}m` : `${m}m`;
+    }
+    return `${Math.floor(ms / 1000)}s`;
+  };
+  ```
+</ParamField>
+
+<ParamField path="onDragStart" type="(c: Camion) => void" required>
+  Callback when user starts dragging this card
+</ParamField>
+
+<ParamField path="onDragEnd" type="() => void" required>
+  Callback when drag operation ends (drop or cancel)
+</ParamField>
+
+<ParamField path="darkMode" type="boolean" default="true">
+  Enables dark theme styling
+</ParamField>
+
+## State Management
+
+### Real-Time Timer
+
+```typescript
+const [now, setNow] = useState(() => Date.now());
+
+useEffect(() => {
+  if (!simulacionActiva) return;
+  const id = setInterval(() => setNow(Date.now()), 1000);
+  return () => clearInterval(id);
+}, [simulacionActiva]);
+```
+
+Updates every second to recalculate elapsed time for display.
+
+## Traffic Light Colors
+
+```typescript
+const color = getColorEstado(c.estadoAlerta);
+
+// From bahiasConfig.ts
+export const getColorEstado = (estado: EstadoAlerta): string => {
+  switch (estado) {
+    case 'verde':    return '#22c55e';  // Green
+    case 'amarillo': return '#eab308';  // Yellow
+    case 'rojo':     return '#ef4444';  // Red
+    default:         return '#94a3b8';  // Gray (fallback)
+  }
+};
+```
+
+The `estadoAlerta` is calculated by the parent component (`SimuladorMapa`) based on elapsed time vs. thresholds.
+
+## Drag-and-Drop Implementation
+
+```typescript
+<div
+  draggable={simulacionActiva}
+  onDragStart={e => {
+    e.dataTransfer.setData('truckId', c.id);
+    onDragStart(c);
+  }}
+  onDragEnd={onDragEnd}
+  className={`
+    ${simulacionActiva 
+      ? 'cursor-grab active:cursor-grabbing hover:scale-[1.02]' 
+      : 'cursor-default'}
+  `}
+  style={{
+    border: `2px solid ${color}`,
+    boxShadow: `0 0 10px ${color}44, 0 4px 10px rgba(0,0,0,0.4)`,
+    animation: 'truckEntry 0.35s ease',
+  }}
+>
+```
+
+**Data Transfer:**
+- Sets `truckId` in `dataTransfer` for bay validation
+- Calls `onDragStart` to store truck object in parent state
+
+**Visual Feedback:**
+- Hover: 2% scale increase
+- Active drag: `cursor-grabbing`
+- Border: Traffic light colored with glow effect
+
+## Card Layout
+
+### Status Indicators (Top Right)
+
+```typescript
+{/* Traffic light dot */}
+<div
+  className="absolute top-2 right-2 w-2.5 h-2.5 rounded-full"
+  style={{
+    background: color,
+    boxShadow: `0 0 5px ${color}`,
+    animation: c.estadoAlerta === 'rojo' ? 'pulse 1s infinite' : 'none',
+  }}
+/>
+
+{/* Incident warning */}
+{tieneIncidencia && (
+  <div
+    className="absolute top-2 right-6 text-amber-400"
+    title={`${c.incidencias} incidencia(s) activa(s)`}
+  >
+    ⚠️
+  </div>
+)}
+```
+
+**Pulse Animation:** Only active when `estadoAlerta === 'rojo'`
+
+### Shift Badge (Top Left)
+
+```typescript
+{c.turno && (
+  <div
+    className="absolute top-2 left-2 rounded px-1.5 py-0.5 font-semibold bg-violet-500/40 text-violet-300"
+    style={{ fontSize: 'clamp(0.5rem,0.6vw,0.6rem)' }}
+  >
+    T{c.turno}
+  </div>
+)}
+```
+
+Displays shift number (1, 2, or 3) if assigned.
+
+### Main Content
+
+```typescript
+{/* Plate number */}
+<div
+  className={`font-extrabold tracking-wider mt-1 mb-0.5 ${c.turno ? 'pl-2' : ''}`}
+  style={{ fontSize: 'clamp(0.82rem,1vw,1rem)' }}
+>
+  🚛 {c.placa}
+</div>
+
+{/* Truck type name */}
+<div style={{ fontSize: 'clamp(0.6rem,0.72vw,0.72rem)' }}>
+  {NOMBRES_TIPO_CAMION[c.tipoCodigo]}
+</div>
+
+{/* Operation badge */}
+<div
+  className={`inline-block font-bold rounded-full px-2 py-0.5
+    ${c.operacionCodigo === 'C'
+      ? 'bg-blue-500/25 text-blue-400'
+      : 'bg-green-600/25 text-green-400'}
+  `}
+  style={{ fontSize: 'clamp(0.58rem,0.68vw,0.68rem)' }}
+>
+  {c.operacionCodigo === 'C' ? '⬆ CARGA' : '⬇ DESCARGA'}
+</div>
+
+{/* Product */}
+<div
+  className="overflow-hidden text-ellipsis whitespace-nowrap"
+  style={{ fontSize: 'clamp(0.6rem,0.7vw,0.7rem)' }}
+>
+  📦 {c.producto}
+</div>
+
+{/* Company */}
+<div
+  className="overflow-hidden text-ellipsis whitespace-nowrap"
+  style={{ fontSize: 'clamp(0.56rem,0.65vw,0.65rem)' }}
+>
+  🏢 {c.propietario}
+</div>
+```
+
+### Footer (Time Display)
+
+```typescript
+<div className="mt-1.5 pt-1.5 flex justify-between items-center border-t">
+  {/* Arrival time */}
+  <span style={{ fontSize: 'clamp(0.52rem,0.62vw,0.62rem)' }}>
+    {c.hora || c.fecha}
+  </span>
+  
+  {/* Elapsed time (traffic light colored) */}
+  <span
+    className="font-bold"
+    style={{ color, fontSize: 'clamp(0.66rem,0.78vw,0.78rem)' }}
+  >
+    {formatTiempo(ms, config.modo)}
+  </span>
+</div>
+```
+
+**Time Calculation:**
+```typescript
+const ms = now - c.tiempoLlegadaCola;
+```
+
+## Truck Type Names
+
+```typescript
+// From bahiasConfig.ts
+export const NOMBRES_TIPO_CAMION: Record<TipoCamion, string> = {
+  TR: 'Tráiler',
+  SP: 'Semipesado',
+  TQ: 'Tanque',
+  CI: 'Cisternas',
+  CV: 'Camión Volteo',
+  FU: 'Furgón',
+  LP: 'Ligero Pequeño',
+  LG: 'Ligero Grande',
+};
+```
+
+Displays full truck type name instead of code for better UX.
+
+## Dark Mode Styling
+
+```typescript
+const dm = darkMode;
+
+style={{
+  background: dm ? 'rgba(10,16,30,0.92)' : 'rgba(255,255,255,0.95)',
+  // ...
+}}
+
+className={`${dm ? 'text-slate-100' : 'text-slate-900'}`}
+```
+
+**Dark Mode:**
+- Background: Near-black with transparency
+- Text: Light slate colors
+
+**Light Mode:**
+- Background: White with transparency
+- Text: Dark slate colors
+
+## Entry Animation
+
+```css
+@keyframes truckEntry {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+```
+
+Applied via `animation: 'truckEntry 0.35s ease'`
+
+## Responsive Design
+
+All font sizes use `clamp()` for responsive scaling:
+
+```css
+font-size: clamp(min, preferred, max)
+```
+
+**Examples:**
+- Plate: `clamp(0.82rem, 1vw, 1rem)`
+- Type: `clamp(0.6rem, 0.72vw, 0.72rem)`
+- Operation: `clamp(0.58rem, 0.68vw, 0.68rem)`
+
+Ensures readability across screen sizes without media queries.
+
+## Incident Display
+
+```typescript
+const tieneIncidencia = (c.incidencias ?? 0) > 0;
+
+{tieneIncidencia && (
+  <div
+    className="absolute top-2 right-6 text-amber-400"
+    title={`${c.incidencias} incidencia(s) activa(s)`}
+  >
+    ⚠️
+  </div>
+)}
+```
+
+**Logic:**
+- Shows amber warning icon if `incidencias > 0`
+- Tooltip displays incident count
+- Positioned to left of traffic light dot
+
+## Usage Example
+
+```tsx
+import TarjetaCamion from './TarjetaCamion';
+
+function QueueFooter({ cola, simulacionActiva, config }) {
+  const [camionArrastrando, setCamionArrastrando] = useState(null);
+  
+  return (
+    <footer className="overflow-y-auto">
+      <div className="grid grid-cols-5 gap-3">
+        {cola.map(c => (
+          <TarjetaCamion
+            key={c.id}
+            camion={c}
+            simulacionActiva={simulacionActiva}
+            config={config}
+            formatTiempo={formatTiempo}
+            onDragStart={setCamionArrastrando}
+            onDragEnd={() => setCamionArrastrando(null)}
+            darkMode={true}
+          />
+        ))}
+      </div>
+    </footer>
+  );
+}
+```
+
+## Integration with Parent
+
+The parent component (`SimuladorMapa`) is responsible for:
+
+1. **Updating `estadoAlerta`** every second based on elapsed time
+2. **Incrementing `incidencias`** when incidents are registered
+3. **Storing dragged truck** in state for bay validation
+4. **Filtering queue** to exclude trucks already in bays
+
+```typescript
+// Parent's timer effect (SimuladorMapa.tsx:142-158)
+useEffect(() => {
+  if (!simulacionActiva) return;
+  const factor = config.modo === 'real' ? 60_000 : 1_000;
+  
+  const interval = setInterval(() => {
+    setCola(prev => prev.map(c => {
+      const unidad = (Date.now() - c.tiempoLlegadaCola) / factor;
+      const estado: EstadoAlerta =
+        unidad >= config.tiempoRojo ? 'rojo' :
+        unidad >= config.tiempoAmarillo ? 'amarillo' : 'verde';
+      // Updates estadoAlerta for TarjetaCamion display
+      return { ...c, estadoAlerta: estado, maxAlertaReached: ... };
+    }));
+  }, 1_000);
+  
+  return () => clearInterval(interval);
+}, [simulacionActiva, config.modo, config.tiempoAmarillo, config.tiempoRojo]);
+```
+
+## References
+
+- **Source**: `src/Componentes/TarjetaCamion.tsx:17-156`
+- **Parent**: [`SimuladorMapa`](/api/components/simulador-mapa)
+- **Utilities**: `getColorEstado()`, `NOMBRES_TIPO_CAMION` from `bahiasConfig.ts`
+- **Related**: [`BahiaOverlay`](/api/components/bahia-overlay) (drop target)

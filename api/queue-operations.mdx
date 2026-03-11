@@ -1,0 +1,217 @@
+---
+title: 'Queue Operations'
+description: 'API reference for fetching and managing trucks in the queue'
+icon: 'truck'
+---
+
+## Overview
+
+Queue operations handle fetching trucks currently waiting in the "En cola" state from the `viajes_camiones` table. The main function maps raw database records to the internal `Camion` type used throughout the React application.
+
+## fetchCamionesCola
+
+Retrieves all trucks currently in the queue, ordered by arrival time.
+
+```typescript
+export async function fetchCamionesCola(): Promise<Camion[]>
+```
+
+### Return Type
+
+<ResponseField name="return" type="Camion[]">
+  Array of trucks in queue, ordered by `hora_llegada` ascending. Returns empty array on error.
+</ResponseField>
+
+### Query Details
+
+The function performs the following query:
+
+```sql
+SELECT * FROM viajes_camiones
+WHERE estado = 'En cola'
+ORDER BY hora_llegada ASC
+```
+
+### Type Mapping
+
+The raw database records are transformed to the internal `Camion` type:
+
+<ResponseField name="id" type="string">
+  String representation of the primary key
+</ResponseField>
+
+<ResponseField name="id_db" type="number">
+  Integer primary key from database
+</ResponseField>
+
+<ResponseField name="id_viaje" type="string">
+  Trip identifier (falls back to `id` if null)
+</ResponseField>
+
+<ResponseField name="placa" type="string">
+  License plate from `tracto` column ("—" if null)
+</ResponseField>
+
+<ResponseField name="frotcom" type="string | undefined">
+  Frotcom tracking ID (undefined if null)
+</ResponseField>
+
+<ResponseField name="propietario" type="string">
+  Owner name ("—" if null)
+</ResponseField>
+
+<ResponseField name="fecha" type="string">
+  Arrival date
+</ResponseField>
+
+<ResponseField name="hora" type="string">
+  Arrival time from `hora_llegada`
+</ResponseField>
+
+<ResponseField name="tipoOriginal" type="string">
+  Raw truck type from `tipo_unidad` column
+</ResponseField>
+
+<ResponseField name="tipoCodigo" type="TipoCamion">
+  Normalized truck type code: 'P' (pari-holero), 'J' (jumbo), 'B' (bi-tren), 'T' (tolva), 'O' (other)
+</ResponseField>
+
+<ResponseField name="operacionCodigo" type="OperacionCodigo">
+  'C' for "Carga" (loading), 'D' for "Descarga" (unloading)
+</ResponseField>
+
+<ResponseField name="producto" type="string">
+  Product type from `tipo_carga` (if loading) or `tipo_descarga` (if unloading)
+</ResponseField>
+
+<ResponseField name="tiempoEntradaPatio" type="number">
+  Timestamp in milliseconds when truck entered the yard
+</ResponseField>
+
+<ResponseField name="tiempoLlegadaCola" type="number">
+  Timestamp in milliseconds when truck joined the queue
+</ResponseField>
+
+<ResponseField name="estadoAlerta" type="'verde'">
+  Alert status (always 'verde' for queued trucks)
+</ResponseField>
+
+<ResponseField name="maxAlertaReached" type="'verde'">
+  Maximum alert level reached (always 'verde' initially)
+</ResponseField>
+
+<ResponseField name="bahiaActual" type="string | undefined">
+  Current bay assignment (undefined if not assigned)
+</ResponseField>
+
+<ResponseField name="incidencias" type="number">
+  Count of incidents from `conteo_incidencias` (0 if null)
+</ResponseField>
+
+<ResponseField name="incidenciaAbierta" type="boolean">
+  Whether truck has an open incident (always false in queue)
+</ResponseField>
+
+### Truck Type Mapping
+
+The `tipo_unidad` field is normalized using this mapping:
+
+| Database Value | Code | Type |
+|----------------|------|------|
+| "parihuelero", "pariholero", "pari-holero" | `P` | Pari-holero |
+| "jumbo" | `J` | Jumbo |
+| "bi-tren", "bitren" | `B` | Bi-tren |
+| "tolva" | `T` | Tolva |
+| (any other) | `O` | Other |
+
+### Time Conversion
+
+The `hora_llegada` field (Postgres TIME format "HH:MM:SS") is converted to a JavaScript timestamp:
+
+```typescript
+function horaATimestamp(hora: string | null): number {
+  if (!hora) return Date.now();
+  const [h, m, s] = hora.split(':').map(Number);
+  const d = new Date();
+  d.setHours(h, m, s ?? 0, 0);
+  return d.getTime();
+}
+```
+
+### Example Usage
+
+```typescript
+import { fetchCamionesCola } from './services/supabaseService';
+
+// Fetch all trucks in queue
+const trucks = await fetchCamionesCola();
+
+console.log(`${trucks.length} trucks in queue`);
+
+trucks.forEach(truck => {
+  console.log(`${truck.placa} - ${truck.tipoCodigo} - ${truck.producto}`);
+});
+```
+
+### Real-world Example
+
+```typescript
+import { useEffect, useState } from 'react';
+import { fetchCamionesCola } from './services/supabaseService';
+import type { Camion } from './types';
+
+function QueuePanel() {
+  const [trucks, setTrucks] = useState<Camion[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    async function loadQueue() {
+      const data = await fetchCamionesCola();
+      setTrucks(data);
+      setLoading(false);
+    }
+    loadQueue();
+  }, []);
+
+  if (loading) return <div>Loading queue...</div>;
+
+  return (
+    <div>
+      <h2>Trucks in Queue: {trucks.length}</h2>
+      {trucks.map(truck => (
+        <div key={truck.id}>
+          <span>{truck.placa}</span>
+          <span>{truck.tipoCodigo}</span>
+          <span>{truck.producto}</span>
+          <span>Incidents: {truck.incidencias}</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+```
+
+### Error Handling
+
+The function returns an empty array on error and logs to console:
+
+```typescript
+if (error) { 
+  manejarError('fetchCamionesCola', error); 
+  return []; 
+}
+if (!data?.length) return [];
+```
+
+No exceptions are thrown, making it safe to use in UI components without try-catch blocks.
+
+## Related Functions
+
+<CardGroup cols={2}>
+  <Card title="Incident Operations" icon="triangle-exclamation" href="./incident-operations">
+    Query and manage incidents for queued trucks
+  </Card>
+  <Card title="Trip Operations" icon="route" href="./trip-operations">
+    Move trucks from queue to bays
+  </Card>
+</CardGroup>

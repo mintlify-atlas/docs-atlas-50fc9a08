@@ -1,0 +1,539 @@
+---
+title: 'Installation'
+description: 'Complete setup guide for Dashboard Backus development environment'
+---
+
+## Overview
+
+Dashboard Backus is a React + TypeScript application built with Vite and powered by Supabase. This guide will walk you through setting up a complete local development environment.
+
+## System Requirements
+
+- **Node.js** 18.x or higher
+- **npm** 9.x or higher (included with Node.js)
+- **Git** for version control
+- A **Supabase** account and project
+- Code editor (VS Code recommended)
+
+## Technology Stack
+
+Here's what powers Dashboard Backus:
+
+```json
+// package.json dependencies
+{
+  "dependencies": {
+    "@supabase/supabase-js": "^2.86.2",
+    "bootstrap": "^5.3.8",
+    "react": "^19.2.0",
+    "react-bootstrap": "^2.10.10",
+    "react-dom": "^19.2.0"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "^4.2.1",
+    "@types/react": "^19.2.5",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^5.1.1",
+    "typescript": "~5.9.3",
+    "vite": "^7.2.4"
+  }
+}
+```
+
+## Installation Steps
+
+<Steps>
+  <Step title="Clone the Repository">
+    Start by cloning the Dashboard Backus repository to your local machine:
+
+    ```bash
+    git clone https://github.com/KevinhosUTP/Proyecto-backus-2.0.git
+    cd Proyecto-backus-2.0
+    ```
+
+    <Info>
+      The repository is also available at `https://github.com/k3vosx/ProyectoBackus/` (alternative URL)
+    </Info>
+  </Step>
+
+  <Step title="Install Dependencies">
+    Install all required npm packages:
+
+    ```bash
+    npm install
+    ```
+
+    This will install:
+    - **React 19.2.0** — UI framework
+    - **TypeScript 5.9.3** — Type safety
+    - **Vite 7.2.4** — Lightning-fast dev server and build tool
+    - **Supabase JS 2.86.2** — Backend client for auth and realtime data
+    - **Tailwind CSS 4.2.1** — Utility-first CSS framework
+    - **Bootstrap 5.3.8** — Component styling
+
+    <Tip>
+      Installation typically takes 1-2 minutes depending on your internet connection.
+    </Tip>
+  </Step>
+
+  <Step title="Configure Environment Variables">
+    Copy the example environment file and fill in your Supabase credentials:
+
+    ```bash
+    cp .env.example .env
+    ```
+
+    Now edit `.env` with your actual values:
+
+    ```bash
+    # ── Supabase ──────────────────────────────────────────────────────────────────
+    VITE_SUPABASE_URL=https://<your-project>.supabase.co
+    VITE_SUPABASE_ANON_KEY=<your-anon-key>
+
+    # ── Tables ────────────────────────────────────────────────────────────────────
+    VITE_TABLE_VIAJES=viajes_camiones
+    VITE_TABLE_INCIDENCIAS=incidencias
+    VITE_TABLE_ROLES=configuracion_roles
+
+    # ── Views ─────────────────────────────────────────────────────────────────────
+    VITE_VIEW_PRIORIDAD=vista_unidad_prioridad
+    VITE_VIEW_TURNOS=vista_dashboard_turnos
+    VITE_VIEW_PROMEDIO=vista_promedio_patio_neto
+    ```
+
+    <Warning>
+      **NEVER commit your `.env` file to version control!** It's already listed in `.gitignore` for security.
+    </Warning>
+
+    ### Where to Find Your Supabase Credentials
+
+    1. Go to your [Supabase Dashboard](https://app.supabase.com)
+    2. Select your project
+    3. Navigate to **Settings** → **API**
+    4. Copy:
+       - **Project URL** → `VITE_SUPABASE_URL`
+       - **anon public** key → `VITE_SUPABASE_ANON_KEY`
+  </Step>
+
+  <Step title="Verify Supabase Connection">
+    The application validates your Supabase credentials on startup:
+
+    ```typescript
+    // src/supabaseClient.ts
+    import { createClient } from '@supabase/supabase-js';
+
+    const supabaseUrl  = import.meta.env.VITE_SUPABASE_URL as string;
+    const supabaseKey  = import.meta.env.VITE_SUPABASE_ANON_KEY as string;
+
+    if (!supabaseUrl || !supabaseKey) {
+      throw new Error(
+        '[supabaseClient] Faltan variables de entorno VITE_SUPABASE_URL o VITE_SUPABASE_ANON_KEY.\n' +
+        'Crea un archivo .env en la raíz del proyecto (ver .env.example).'
+      );
+    }
+
+    export const supabase = createClient(supabaseUrl, supabaseKey);
+    ```
+
+    If credentials are missing, you'll see a clear error message on startup.
+  </Step>
+
+  <Step title="Start the Development Server">
+    Launch the Vite development server:
+
+    ```bash
+    npm run dev
+    ```
+
+    You should see output similar to:
+
+    ```bash
+    VITE v7.2.4  ready in 324 ms
+
+    ➜  Local:   http://localhost:5173/
+    ➜  Network: use --host to expose
+    ➜  press h + enter to show help
+    ```
+
+    <Info>
+      The dev server supports **Hot Module Replacement (HMR)** — changes to your code will instantly reflect in the browser without a full page reload.
+    </Info>
+  </Step>
+
+  <Step title="Access the Application">
+    Open your browser and navigate to:
+
+    ```
+    http://localhost:5173
+    ```
+
+    You should see the **login modal** with the Backus logo. If you see this, congratulations — your installation is successful!
+  </Step>
+</Steps>
+
+## Database Setup
+
+### Required Supabase Tables
+
+Dashboard Backus requires the following tables in your Supabase project:
+
+#### 1. `usuarios` (Users)
+
+Stores authentication credentials with MD5-hashed passwords.
+
+```sql
+-- supabase_usuarios.sql (included in repository)
+CREATE TABLE usuarios (
+  id SERIAL PRIMARY KEY,
+  email TEXT UNIQUE NOT NULL,
+  pin TEXT NOT NULL,  -- MD5 hash of password
+  rol TEXT NOT NULL CHECK (rol IN ('admin', 'cliente')),
+  nombre TEXT,
+  activo BOOLEAN DEFAULT true
+);
+```
+
+<Tip>
+  The full SQL schema is available in `supabase_usuarios.sql` at the repository root.
+</Tip>
+
+#### 2. `viajes_camiones` (Truck Trips)
+
+Main table for tracking truck movements:
+
+```typescript
+// Key columns used by the application
+{
+  id: number;              // Primary key
+  id_viaje: string;        // Unique trip identifier (text)
+  tracto: string;          // Truck plate number
+  propietario: string;     // Owner
+  fecha: string;           // Date
+  hora_llegada: string;    // Arrival time "HH:MM:SS"
+  tipo_unidad: string;     // Truck type (Parihuelero, Jumbo, etc.)
+  operacion: string;       // "Carga" or "Descarga"
+  estado: string;          // "En cola", "Cargando", "Descargando", "Finalizado"
+  bahia_actual: string;    // Current bay assignment
+  hora_salida: string;     // Exit time
+  tipo_carga: string;      // Loading product type
+  tipo_descarga: string;   // Unloading product type
+  frotcom: string;         // Frotcom tracking ID
+}
+```
+
+#### 3. `incidencias` (Incidents)
+
+Tracks delays and bottlenecks:
+
+```sql
+CREATE TABLE incidencias (
+  id_incidencia SERIAL PRIMARY KEY,
+  id_camion INTEGER REFERENCES viajes_camiones(id),
+  hora_inicio TIME NOT NULL,
+  hora_fin TIME,
+  duracion_calculada INTERVAL GENERATED ALWAYS AS 
+    (hora_fin - hora_inicio) STORED
+);
+```
+
+### Required Views
+
+Create these PostgreSQL views for the dashboard panels:
+
+<CodeGroup>
+```sql vista_unidad_prioridad
+-- Shows truck with longest wait time
+CREATE VIEW vista_unidad_prioridad AS
+SELECT 
+  tracto,
+  hora_llegada,
+  bahia_actual,
+  (CURRENT_TIME - hora_llegada) AS tiempo_transcurrido
+FROM viajes_camiones
+WHERE estado != 'Finalizado'
+ORDER BY hora_llegada ASC
+LIMIT 1;
+```
+
+```sql vista_dashboard_turnos
+-- Counts completed trips per shift
+CREATE VIEW vista_dashboard_turnos AS
+SELECT 
+  fecha,
+  COUNT(*) FILTER (WHERE EXTRACT(HOUR FROM hora_salida) BETWEEN 7 AND 14) AS turno_1,
+  COUNT(*) FILTER (WHERE EXTRACT(HOUR FROM hora_salida) BETWEEN 15 AND 22) AS turno_2,
+  COUNT(*) FILTER (WHERE EXTRACT(HOUR FROM hora_salida) NOT BETWEEN 7 AND 22) AS turno_3
+FROM viajes_camiones
+WHERE estado = 'Finalizado'
+GROUP BY fecha;
+```
+
+```sql vista_promedio_patio_neto
+-- Average net yard time (excluding incidents)
+CREATE VIEW vista_promedio_patio_neto AS
+SELECT 
+  AVG(hora_salida - hora_llegada - COALESCE(incident_time, '00:00:00'::INTERVAL)) 
+    AS promedio_neto_patio
+FROM viajes_camiones
+LEFT JOIN (
+  SELECT id_camion, SUM(duracion_calculada) as incident_time
+  FROM incidencias
+  GROUP BY id_camion
+) inc ON viajes_camiones.id = inc.id_camion
+WHERE estado = 'Finalizado';
+```
+</CodeGroup>
+
+## Development Commands
+
+Here are the npm scripts available in the project:
+
+```json
+// package.json scripts
+{
+  "scripts": {
+    "dev": "vite",                    // Start dev server
+    "build": "tsc -b && vite build",  // Type-check + production build
+    "lint": "eslint .",               // Run ESLint
+    "preview": "vite preview",        // Preview production build locally
+    "predeploy": "npm run build",     // Pre-deployment build
+    "deploy": "gh-pages -d dist"      // Deploy to GitHub Pages
+  }
+}
+```
+
+### Usage Examples
+
+```bash
+# Development (with hot reload)
+npm run dev
+
+# Type checking and linting
+npm run lint
+
+# Production build
+npm run build
+
+# Preview production build
+npm run preview
+
+# Deploy to GitHub Pages
+npm run deploy
+```
+
+## Vite Configuration
+
+The project uses a minimal Vite configuration:
+
+```typescript
+// vite.config.ts
+import { defineConfig } from 'vite'
+import react from '@vitejs/plugin-react'
+import tailwindcss from '@tailwindcss/vite'
+
+export default defineConfig({
+  plugins: [react(), tailwindcss()],
+  base: "/",
+})
+```
+
+<Info>
+  The `base` property is set to `"/"` for standard deployments. For GitHub Pages, this is automatically adjusted during the deploy script.
+</Info>
+
+## TypeScript Configuration
+
+Dashboard Backus uses strict TypeScript settings for maximum type safety:
+
+<CodeGroup>
+```json tsconfig.json
+{
+  "files": [],
+  "references": [
+    { "path": "./tsconfig.app.json" },
+    { "path": "./tsconfig.node.json" }
+  ]
+}
+```
+
+```json tsconfig.app.json
+{
+  "compilerOptions": {
+    "tsBuildInfoFile": "./node_modules/.tmp/tsconfig.app.tsbuildinfo",
+    "target": "ES2020",
+    "useDefineForClassFields": true,
+    "lib": ["ES2020", "DOM", "DOM.Iterable"],
+    "module": "ESNext",
+    "skipLibCheck": true,
+    "moduleResolution": "bundler",
+    "allowImportingTsExtensions": true,
+    "isolatedModules": true,
+    "moduleDetection": "force",
+    "noEmit": true,
+    "jsx": "react-jsx",
+    "strict": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "noFallthroughCasesInSwitch": true,
+    "noUncheckedSideEffectImports": true
+  },
+  "include": ["src"]
+}
+```
+</CodeGroup>
+
+## Project Structure
+
+After installation, your project structure should look like this:
+
+```
+Proyecto-backus-2.0/
+├── public/
+│   ├── logoBackus.png          # Backus logo for login screen
+│   └── vite.svg
+├── src/
+│   ├── Componentes/
+│   │   ├── AnalizadorPatio.tsx     # Yard analyzer component
+│   │   ├── BahiaOverlay.tsx        # Bay overlay for map
+│   │   ├── Footer.tsx              # App footer
+│   │   ├── Header.tsx              # App header
+│   │   ├── ModalConfig.tsx         # Admin configuration modal
+│   │   ├── ModalIncidencia.tsx     # Incident management modal
+│   │   ├── ModalLogin.tsx          # Login screen
+│   │   ├── ModalReporte.tsx        # Reports modal
+│   │   ├── PanelFlotante.tsx       # Floating dashboard panels
+│   │   ├── SimuladorMapa.tsx       # Main map simulator
+│   │   ├── TarjetaCamion.tsx       # Truck card component
+│   │   └── bahiasConfig.ts         # Bay configuration
+│   ├── services/
+│   │   └── supabaseService.ts      # All Supabase queries
+│   ├── App.tsx                     # Main app component
+│   ├── main.tsx                    # App entry point
+│   ├── supabaseClient.ts           # Supabase client initialization
+│   └── types.ts                    # TypeScript type definitions
+├── .env.example                    # Environment variable template
+├── .gitignore
+├── eslint.config.js
+├── index.html                      # HTML entry point
+├── package.json
+├── README.md
+├── supabase_usuarios.sql           # User table schema
+├── tsconfig.json
+├── vercel.json                     # Vercel deployment config
+└── vite.config.ts
+```
+
+## Verification
+
+To verify your installation is complete:
+
+<Steps>
+  <Step title="Check Dependencies">
+    ```bash
+    npm list --depth=0
+    ```
+    
+    Should show all packages without errors.
+  </Step>
+
+  <Step title="Verify TypeScript Compilation">
+    ```bash
+    npx tsc -b
+    ```
+    
+    Should complete with no errors.
+  </Step>
+
+  <Step title="Test Supabase Connection">
+    Start the dev server and check the browser console. You should NOT see:
+    ```
+    [supabaseClient] Faltan variables de entorno...
+    ```
+  </Step>
+
+  <Step title="Login Test">
+    Try logging in with test credentials (if you have them set up in your `usuarios` table).
+  </Step>
+</Steps>
+
+## Common Issues
+
+### Port Already in Use
+
+If port 5173 is already taken:
+
+```bash
+# Vite will automatically try the next available port
+# Or specify a custom port:
+npm run dev -- --port 3000
+```
+
+### Supabase Connection Errors
+
+```
+Error: Missing environment variables VITE_SUPABASE_URL or VITE_SUPABASE_ANON_KEY
+```
+
+**Solution**: Double-check your `.env` file:
+- File must be named exactly `.env` (no `.txt` extension)
+- Must be in the project root directory
+- Variable names must start with `VITE_` prefix
+- No spaces around the `=` sign
+
+### TypeScript Errors
+
+```bash
+# Clear TypeScript build cache
+rm -rf node_modules/.tmp
+npx tsc -b
+```
+
+### Node Version Issues
+
+If you encounter module resolution errors:
+
+```bash
+# Check your Node version
+node --version
+
+# Should be 18.x or higher
+# If not, use nvm to install:
+nvm install 18
+nvm use 18
+```
+
+## Next Steps
+
+Now that you have Dashboard Backus running locally:
+
+<CardGroup cols={2}>
+  <Card title="Quickstart Guide" icon="rocket" href="/quickstart">
+    Learn how to use the dashboard and manage trucks
+  </Card>
+  
+  <Card title="API Reference" icon="code" href="/api-reference">
+    Explore all Supabase service functions
+  </Card>
+  
+  <Card title="Bay Configuration" icon="map-location-dot" href="/bay-config">
+    Customize bay locations and truck compatibility
+  </Card>
+  
+  <Card title="Deployment" icon="cloud-arrow-up" href="/deployment">
+    Deploy to Vercel or GitHub Pages
+  </Card>
+</CardGroup>
+
+## Getting Help
+
+If you run into issues:
+
+1. Check the browser console for error messages
+2. Verify all environment variables are set correctly
+3. Ensure your Supabase tables and views are created
+4. Review the [Supabase documentation](https://supabase.com/docs)
+5. Check the [Vite documentation](https://vitejs.dev/guide/)
+
+<Tip>
+  Most issues are related to missing environment variables or incorrect Supabase table schemas. Double-check these first!
+</Tip>

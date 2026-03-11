@@ -1,0 +1,465 @@
+---
+title: Dashboard Panels
+description: Real-time floating statistics with Supabase polling and responsive design
+icon: chart-line
+---
+
+## Overview
+
+Dashboard Backus displays three floating panels on the map that show live operational statistics. These panels query Supabase views every 15 seconds and update without disrupting the operator's workflow.
+
+## Panel Architecture
+
+```typescript
+// PanelFlotante.tsx - Reusable component
+interface Props {
+  titulo: string;
+  children: ReactNode;
+  style?: CSSProperties;  // Absolute positioning
+  darkMode?: boolean;
+}
+
+const PanelFlotante = ({ titulo, children, style, darkMode = true }: Props) => {
+  return (
+    <div
+      className={`
+        absolute z-[25] rounded-xl
+        border-t-2 border-sky-400/40
+        backdrop-blur-xl
+        transition-colors duration-300
+        ${darkMode
+          ? 'bg-black/75 border border-slate-600/20'
+          : 'bg-white/90 border border-slate-200'}
+      `}
+      style={{
+        padding: 'clamp(8px,1vh,14px) clamp(10px,1.2vw,18px)',
+        ...style,
+      }}
+    >
+      <div className="text-sky-400 font-bold tracking-widest uppercase opacity-85 mb-2">
+        {titulo}
+      </div>
+      <div>{children}</div>
+    </div>
+  );
+};
+```
+
+## Panel Locations
+
+Each panel is positioned using percentage-based coordinates:
+
+```typescript
+// SimuladorMapa.tsx
+<PanelFlotante
+  titulo="🚨 Unidad Mayor Prioridad"
+  darkMode={darkMode}
+  style={{ top: '5.69%', left: '70.78%', width: 'clamp(160px,18vw,240px)' }}
+>
+  {/* Panel 1 content */}
+</PanelFlotante>
+
+<PanelFlotante
+  titulo="⏱ Tiempo Promedio Patio"
+  darkMode={darkMode}
+  style={{ top: '31.38%', left: '17.44%', width: 'clamp(140px,15vw,200px)' }}
+>
+  {/* Panel 2 content */}
+</PanelFlotante>
+
+<PanelFlotante
+  titulo="🔢 Conteo por Turno"
+  darkMode={darkMode}
+  style={{ top: '57.93%', left: '17.44%', width: 'clamp(155px,16vw,230px)' }}
+>
+  {/* Panel 3 content */}
+</PanelFlotante>
+```
+
+<Note>
+Panels use `clamp()` for responsive sizing: `clamp(min, preferred, max)` ensures readability across screen sizes.
+</Note>
+
+## Panel 1: Unidad Mayor Prioridad
+
+### Purpose
+Shows the truck with the **longest wait time** in queue or in a bay (excluding finalized trucks).
+
+### Data Source
+```sql
+-- vista_unidad_prioridad (Supabase view)
+SELECT 
+  tracto,
+  hora_llegada,
+  bahia_actual,
+  CURRENT_TIME - hora_llegada AS tiempo_transcurrido
+FROM viajes_camiones
+WHERE estado != 'Finalizado'
+ORDER BY hora_llegada ASC
+LIMIT 1;
+```
+
+### TypeScript Interface
+```typescript
+export interface VwUnidadPrioridad {
+  tracto: string;                     // Truck plate
+  hora_llegada: string;                // "HH:MM:SS"
+  bahia_actual: string | null;         // "Bahía 3" or null if in queue
+  tiempo_transcurrido: string;         // "HH:MM:SS+00" (PostgreSQL interval)
+}
+```
+
+### Fetch Function
+```typescript
+export async function fetchUnidadPrioridad(): Promise<VwUnidadPrioridad | null> {
+  const { data, error } = await supabase
+    .from('vista_unidad_prioridad')
+    .select('tracto, hora_llegada, bahia_actual, tiempo_transcurrido')
+    .limit(1)
+    .maybeSingle();
+
+  if (error) return manejarError('fetchUnidadPrioridad', error);
+  return data as VwUnidadPrioridad | null;
+}
+```
+
+### Display Component
+```typescript
+{panelPrioridad ? (
+  <div>
+    <div className="flex items-center gap-2 mb-1.5">
+      <span className="font-extrabold tracking-wider text-red-400"
+        style={{ fontSize: 'clamp(0.9rem,1.5vw,1.1rem)' }}>
+        {panelPrioridad.tracto}
+      </span>
+      <span className="rounded-full px-2 py-0.5 font-bold text-black bg-red-400"
+        style={{ fontSize: 'clamp(0.6rem,0.9vw,0.72rem)' }}>
+        ⏱ {intervalATexto(panelPrioridad.tiempo_transcurrido)}
+      </span>
+    </div>
+    <div className="leading-relajada text-slate-400"
+      style={{ fontSize: 'clamp(0.6rem,0.85vw,0.73rem)' }}>
+      <div>🕐 Llegada: {panelPrioridad.hora_llegada ?? '—'}</div>
+      <div>📍 Bahía: {panelPrioridad.bahia_actual ?? 'En cola'}</div>
+    </div>
+  </div>
+) : (
+  <span className="text-slate-500">Sin unidades en cola</span>
+)}
+```
+
+### Interval Formatting
+Converts PostgreSQL interval to human-readable text:
+
+```typescript
+export function intervalATexto(interval: string | null | undefined): string {
+  const min = intervalAMinutos(interval);
+  if (min <= 0) return '< 1m';
+  const h = Math.floor(min / 60);
+  const m = Math.floor(min % 60);
+  if (h > 0) return `${h}h ${m}m`;
+  return `${m}m`;
+}
+
+// Examples:
+intervalATexto("02:35:00")  // "2h 35m"
+intervalATexto("00:45:00")  // "45m"
+intervalATexto("00:00:30")  // "< 1m"
+```
+
+## Panel 2: Tiempo Promedio Patio
+
+### Purpose
+Displays the **net average time** trucks spend in the patio (total time minus incident time) for finalized trucks today.
+
+### Data Source
+```sql
+-- vista_promedio_patio_neto (Supabase view)
+SELECT 
+  AVG(
+    (hora_salida - hora_llegada) - COALESCE(
+      (SELECT SUM(duracion_calculada) 
+       FROM incidencias 
+       WHERE id_camion = viajes_camiones.id), 
+      INTERVAL '0'
+    )
+  ) AS promedio_neto_patio
+FROM viajes_camiones
+WHERE estado = 'Finalizado'
+  AND fecha = CURRENT_DATE;
+```
+
+### TypeScript Interface
+```typescript
+export interface VwPromedioPatioNeto {
+  promedio_neto_patio: string | null;  // "HH:MM:SS" or null if no data
+}
+```
+
+### Fetch Function
+```typescript
+export async function fetchPromedioPatioNeto(): Promise<VwPromedioPatioNeto | null> {
+  const { data, error } = await supabase
+    .from('vista_promedio_patio_neto')
+    .select('promedio_neto_patio')
+    .maybeSingle();
+
+  if (error) return manejarError('fetchPromedioPatioNeto', error);
+  return data as VwPromedioPatioNeto | null;
+}
+```
+
+### Display Component
+```typescript
+{panelPromedio?.promedio_neto_patio ? (
+  <>
+    <div className="font-extrabold text-sky-400 text-center leading-none"
+      style={{ fontSize: 'clamp(1.4rem,2.5vw,2rem)' }}>
+      {intervalAMinutos(panelPromedio.promedio_neto_patio).toFixed(1)}
+      <span className="font-normal ml-1 text-slate-400"
+        style={{ fontSize: 'clamp(0.7rem,1vw,0.9rem)' }}>min</span>
+    </div>
+    <div className="text-center mt-1 text-slate-500"
+      style={{ fontSize: 'clamp(0.52rem,0.7vw,0.65rem)' }}>
+      promedio neto del día
+    </div>
+    <div className="text-green-400 text-center mt-1" style={{ fontSize: '0.58rem' }}>
+      ✓ incidencias descontadas
+    </div>
+  </>
+) : (
+  <div className="text-center text-slate-500">Sin finalizados hoy</div>
+)}
+```
+
+### Minute Conversion
+Converts PostgreSQL interval to decimal minutes:
+
+```typescript
+export function intervalAMinutos(interval: string | null | undefined): number {
+  if (!interval) return 0;
+  if (typeof interval !== 'string') return 0;
+  if (!interval.trim()) return 0;
+
+  const clean = interval.replace(/[+-]\d{2}$/, '').trim();
+  const negativo = clean.startsWith('-');
+  const sinSigno = negativo ? clean.slice(1) : clean;
+
+  let dias = 0;
+  let resto = sinSigno;
+  const diaMatch = sinSigno.match(/^(\d+)\s+days?\s+/i);
+  if (diaMatch) {
+    dias = parseInt(diaMatch[1], 10);
+    resto = sinSigno.slice(diaMatch[0].length);
+  }
+
+  const parts = resto.split(':').map(parseFloat);
+  if (parts.length < 2 || parts.some(Number.isNaN)) return 0;
+
+  const [h, m, s = 0] = parts;
+  const total = dias * 24 * 60 + h * 60 + m + s / 60;
+  return negativo ? -total : total;
+}
+
+// Examples:
+intervalAMinutos("02:30:00")      // 150.0
+intervalAMinutos("00:45:30")      // 45.5
+intervalAMinutos("1 day 02:00:00") // 1560.0
+```
+
+## Panel 3: Conteo por Turno
+
+### Purpose
+Shows the count of **finalized trucks** per shift for today.
+
+### Data Source
+```sql
+-- vista_dashboard_turnos (Supabase view)
+SELECT
+  fecha,
+  COUNT(*) FILTER (WHERE turno = 1) AS turno_1,  -- 07:00–15:00
+  COUNT(*) FILTER (WHERE turno = 2) AS turno_2,  -- 15:01–23:00
+  COUNT(*) FILTER (WHERE turno = 3) AS turno_3   -- 23:01–06:59
+FROM viajes_camiones
+WHERE estado = 'Finalizado'
+GROUP BY fecha
+ORDER BY fecha DESC;
+```
+
+### TypeScript Interface
+```typescript
+export interface VwDashboardTurnos {
+  fecha: string;    // "YYYY-MM-DD"
+  turno_1: number;  // T1 count
+  turno_2: number;  // T2 count
+  turno_3: number;  // T3 count
+}
+```
+
+### Fetch Function
+```typescript
+export async function fetchDashboardTurnos(): Promise<VwDashboardTurnos | null> {
+  const hoy = new Date().toISOString().slice(0, 10); // "YYYY-MM-DD"
+  const { data, error } = await supabase
+    .from('vista_dashboard_turnos')
+    .select('fecha, turno_1, turno_2, turno_3')
+    .eq('fecha', hoy)
+    .maybeSingle();
+
+  if (error) return manejarError('fetchDashboardTurnos', error);
+  return data as VwDashboardTurnos | null;
+}
+```
+
+### Display Component
+```typescript
+<div className="flex gap-4 justify-center">
+  {([
+    { key: 'T1', campo: 'turno_1' as const, rango: '07:00–15:00' },
+    { key: 'T2', campo: 'turno_2' as const, rango: '15:01–23:00' },
+    { key: 'T3', campo: 'turno_3' as const, rango: '23:01–06:59' },
+  ] as const).map(({ key, campo, rango }) => (
+    <div key={key} className="text-center">
+      <div className="font-extrabold text-violet-400 leading-none"
+        style={{ fontSize: 'clamp(1.2rem,2vw,1.7rem)' }}>
+        {panelTurnos?.[campo] ?? 0}
+      </div>
+      <div className="mt-0.5 text-slate-500"
+        style={{ fontSize: 'clamp(0.52rem,0.7vw,0.68rem)' }}>{key}</div>
+      <div className="text-slate-600"
+        style={{ fontSize: 'clamp(0.46rem,0.58vw,0.58rem)' }}>{rango}</div>
+    </div>
+  ))}
+</div>
+```
+
+## Polling Logic
+
+All panels refresh every 15 seconds while the session is active:
+
+```typescript
+const recargarPaneles = useCallback(async () => {
+  const [prioridad, turnos, promedio] = await Promise.all([
+    fetchUnidadPrioridad(),
+    fetchDashboardTurnos(),
+    fetchPromedioPatioNeto(),
+  ]);
+  if (prioridad != null) setPanelPrioridad(prioridad);
+  if (turnos    != null) setPanelTurnos(turnos);
+  if (promedio  != null) setPanelPromedio(promedio);
+}, []);
+
+useEffect(() => {
+  if (!simulacionActiva) return;
+  recargarPaneles();
+  const poller = setInterval(recargarPaneles, 15_000);
+  return () => clearInterval(poller);
+}, [simulacionActiva, recargarPaneles]);
+```
+
+<Warning>
+Panels only update when `simulacionActiva = true`. Click **"▶ Iniciar"** to start polling.
+</Warning>
+
+## Loading States
+
+Before session starts, panels show a placeholder:
+
+```typescript
+{!simulacionActiva ? (
+  <span className="text-slate-600" style={{ fontSize: '0.75rem' }}>
+    — Iniciar para ver datos —
+  </span>
+) : (
+  // Panel content
+)}
+```
+
+## Empty States
+
+### No Priority Truck
+```typescript
+{panelPrioridad ? (
+  // Display truck data
+) : (
+  <span className="text-slate-500" style={{ fontSize: '0.8rem' }}>
+    Sin unidades en cola
+  </span>
+)}
+```
+
+### No Average Data
+```typescript
+{panelPromedio?.promedio_neto_patio ? (
+  // Display average
+) : (
+  <div className="text-center text-slate-500">
+    Sin finalizados hoy
+  </div>
+)}
+```
+
+## Responsive Scaling
+
+All text and spacing use `clamp()` for fluid scaling:
+
+```css
+/* Title */
+font-size: clamp(0.55rem, 0.68vw, 0.65rem);
+
+/* Primary value */
+font-size: clamp(1.4rem, 2.5vw, 2rem);
+
+/* Secondary text */
+font-size: clamp(0.52rem, 0.7vw, 0.65rem);
+
+/* Padding */
+padding: clamp(8px, 1vh, 14px) clamp(10px, 1.2vw, 18px);
+```
+
+## Dark/Light Mode
+
+Panels adapt to theme changes:
+
+```typescript
+const dm = darkMode;
+
+className={`
+  ${dm
+    ? 'bg-black/75 border border-slate-600/20 text-slate-200'
+    : 'bg-white/90 border border-slate-200 text-slate-800'}
+`}
+```
+
+## Backdrop Blur
+
+Panels use `backdrop-blur-xl` to remain readable over the satellite map:
+
+```css
+backdrop-blur-xl /* Blurs background behind panel */
+bg-black/75      /* Semi-transparent background */
+```
+
+## Z-Index Layering
+
+```typescript
+z-[25]   // Panels
+z-20     // Bay overlays
+z-30     // Traffic light legend
+z-[999]  // Toast notifications
+```
+
+<Note>
+Panels sit above bays but below toasts, ensuring notifications are always visible.
+</Note>
+
+## Related Features
+
+<CardGroup cols={2}>
+  <Card title="Interactive Map" icon="map" href="./interactive-map">
+    Understand how panels integrate with the map layout
+  </Card>
+  <Card title="Traffic Light System" icon="traffic-light" href="./traffic-light-system">
+    See how the priority panel uses traffic light data
+  </Card>
+</CardGroup>

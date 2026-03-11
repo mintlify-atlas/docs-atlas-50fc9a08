@@ -1,0 +1,291 @@
+---
+title: 'Camion'
+description: 'Main truck entity interface and related type definitions'
+icon: 'truck'
+---
+
+## Overview
+
+The `Camion` interface represents the core truck entity in Dashboard Backus. It tracks trucks throughout their journey from arrival to departure, including queue status, bay assignments, and alert states.
+
+## Camion Interface
+
+Main entity that represents a truck in the system.
+
+<ResponseField name="id" type="string" required>
+  React internal key (stringified database ID)
+</ResponseField>
+
+<ResponseField name="id_db" type="number" required>
+  Foreign key reference to `viajes_camiones.id` table — used for incident tracking
+</ResponseField>
+
+<ResponseField name="id_viaje" type="string" required>
+  Unique trip identifier from `viajes_camiones.id_viaje` (text UNIQUE) — used for trip queries
+</ResponseField>
+
+<ResponseField name="placa" type="string" required>
+  License plate number (tracto)
+</ResponseField>
+
+<ResponseField name="frotcom" type="string">
+  Optional Frotcom fleet tracking identifier
+</ResponseField>
+
+<ResponseField name="propietario" type="string" required>
+  Owner/operator name
+</ResponseField>
+
+<ResponseField name="fecha" type="string" required>
+  Arrival date in "YYYY-MM-DD" format
+</ResponseField>
+
+<ResponseField name="hora" type="string" required>
+  Arrival time in "HH:MM:SS" format
+</ResponseField>
+
+<ResponseField name="tipoOriginal" type="string" required>
+  Original truck type as text from database (e.g., "Parihuelero", "Jumbo")
+</ResponseField>
+
+<ResponseField name="tipoCodigo" type="TipoCamion" required>
+  Normalized truck type code: `P` | `J` | `B` | `T` | `O`
+</ResponseField>
+
+<ResponseField name="operacionCodigo" type="OperacionCodigo" required>
+  Operation type code: `C` (Carga) | `D` (Descarga)
+</ResponseField>
+
+<ResponseField name="producto" type="string" required>
+  Product type being loaded or unloaded (e.g., "Fardos", "PP", "PT")
+</ResponseField>
+
+<ResponseField name="tiempoEntradaPatio" type="number" required>
+  Timestamp in milliseconds when truck entered the yard (for local reference)
+</ResponseField>
+
+<ResponseField name="tiempoLlegadaCola" type="number" required>
+  Timestamp in milliseconds when truck arrived at queue (traffic light)
+</ResponseField>
+
+<ResponseField name="estadoAlerta" type="EstadoAlerta" required>
+  Current alert status based on time thresholds: `verde` | `amarillo` | `rojo`
+</ResponseField>
+
+<ResponseField name="maxAlertaReached" type="EstadoAlerta" required>
+  Maximum alert level reached during the trip (never downgrades)
+</ResponseField>
+
+<ResponseField name="bahiaActual" type="string">
+  Current bay assignment (e.g., "b1", "b3", "b10")
+</ResponseField>
+
+<ResponseField name="turno" type="1 | 2 | 3">
+  Shift number:
+  - `1`: 07:00–15:00
+  - `2`: 15:01–23:00
+  - `3`: 23:01–06:59
+</ResponseField>
+
+<ResponseField name="incidencias" type="number">
+  Counter of registered incidents (maximum 3)
+</ResponseField>
+
+<ResponseField name="incidenciaAbierta" type="boolean">
+  True if there's an open incident without `hora_fin` — displays pulsing alert icon in bay
+</ResponseField>
+
+## TipoCamion Type
+
+Truck type classification codes.
+
+```typescript
+export type TipoCamion = 'P' | 'J' | 'B' | 'T' | 'O';
+```
+
+### Values
+
+| Code | Type | Description |
+|------|------|-------------|
+| `P` | Parihuelero | Standard flatbed truck with removable stakes |
+| `J` | Jumbo | Large capacity truck |
+| `B` | Bi-tren | Bi-train (truck with two trailers) |
+| `T` | Tolva | Dump truck with hopper |
+| `O` | Otros | Other truck types not classified above |
+
+### Type Mapping
+
+The system normalizes database values to type codes:
+
+```typescript
+const TIPO_MAP: Record<string, TipoCamion> = {
+  parihuelero: 'P', 
+  pariholero: 'P', 
+  'pari-holero': 'P',
+  jumbo: 'J',
+  'bi-tren': 'B', 
+  bitren: 'B',
+  tolva: 'T',
+  // Any unknown type defaults to 'O'
+};
+```
+
+## OperacionCodigo Type
+
+Operation type classification.
+
+```typescript
+export type OperacionCodigo = 'C' | 'D';
+```
+
+### Values
+
+| Code | Operation | Description |
+|------|-----------|-------------|
+| `C` | Carga | Loading operation |
+| `D` | Descarga | Unloading operation |
+
+### Operation Detection
+
+The system determines operation code from database text:
+
+```typescript
+const opRaw: string = ((row.operacion as string | null) ?? '').toLowerCase();
+const operacionCodigo: OperacionCodigo = opRaw.startsWith('c') ? 'C' : 'D';
+```
+
+## EstadoAlerta Type
+
+Traffic light alert status based on waiting time.
+
+```typescript
+export type EstadoAlerta = 'verde' | 'amarillo' | 'rojo';
+```
+
+### Values
+
+| State | Color | Description |
+|-------|-------|-------------|
+| `verde` | Green | Normal — within acceptable time range |
+| `amarillo` | Yellow | Warning — approaching time threshold |
+| `rojo` | Red | Critical — exceeded maximum time threshold |
+
+### Color Mapping
+
+Helper function returns hex color codes:
+
+```typescript
+export const getColorEstado = (estado: EstadoAlerta): string => {
+  if (estado === 'rojo')     return '#ef4444';  // Tailwind red-500
+  if (estado === 'amarillo') return '#eab308';  // Tailwind yellow-500
+  return '#22c55e';                              // Tailwind green-500
+};
+```
+
+### Alert Thresholds
+
+Alert states are calculated based on configurable time thresholds:
+
+- **Verde**: `0` to `tiempoAmarillo` minutes
+- **Amarillo**: `tiempoAmarillo` to `tiempoRojo` minutes
+- **Rojo**: `tiempoRojo` minutes and above
+
+Default values are typically `tiempoAmarillo: 30` and `tiempoRojo: 45` minutes.
+
+## Rol Type
+
+User role classification for access control.
+
+```typescript
+export type Rol = 'admin' | 'cliente';
+```
+
+### Values
+
+| Role | Description |
+|------|-------------|
+| `admin` | Full access — can modify configurations, register incidents, and view all data |
+| `cliente` | Read-only access — can view dashboard but cannot modify data |
+
+## Usage Examples
+
+### Fetching Trucks from Queue
+
+```typescript
+import { fetchCamionesCola } from './services/supabaseService';
+import type { Camion } from './types';
+
+const trucks: Camion[] = await fetchCamionesCola();
+console.log(`Found ${trucks.length} trucks in queue`);
+
+// Filter by truck type
+const parihueleros = trucks.filter(t => t.tipoCodigo === 'P');
+
+// Find trucks with open incidents
+const withIncidents = trucks.filter(t => t.incidenciaAbierta);
+
+// Check alert status
+const critical = trucks.filter(t => t.estadoAlerta === 'rojo');
+```
+
+### Type Guards
+
+```typescript
+function isLoadingOperation(truck: Camion): boolean {
+  return truck.operacionCodigo === 'C';
+}
+
+function canUseAllBays(truck: Camion): boolean {
+  return ['P', 'J', 'B', 'T', 'O'].includes(truck.tipoCodigo);
+}
+
+function isParihuelero(truck: Camion): boolean {
+  return truck.tipoCodigo === 'P';
+}
+```
+
+### Bay Compatibility Check
+
+```typescript
+import { BAHIAS_CONFIG } from './Componentes/bahiasConfig';
+import type { Camion, BahiaConfig } from './types';
+
+function canTruckUseBay(truck: Camion, bayId: string): boolean {
+  const bay: BahiaConfig = BAHIAS_CONFIG[bayId];
+  if (!bay) return false;
+  
+  // Check truck type compatibility
+  if (!bay.camionesPermitidos.includes(truck.tipoCodigo)) {
+    return false;
+  }
+  
+  // Check operation compatibility
+  const tasks = bay.tareas[truck.operacionCodigo];
+  return tasks.length > 0;
+}
+```
+
+### Display Truck Type Name
+
+```typescript
+import { NOMBRES_TIPO_CAMION } from './Componentes/bahiasConfig';
+import type { Camion } from './types';
+
+function getTruckTypeName(truck: Camion): string {
+  return NOMBRES_TIPO_CAMION[truck.tipoCodigo];
+}
+
+// Example:
+const truck: Camion = { tipoCodigo: 'P', /* ... */ };
+console.log(getTruckTypeName(truck)); // "Parihuelero"
+```
+
+## Related Types
+
+- [BahiaConfig](/api/types/bahia-config) - Bay configuration and truck permissions
+- [VwUnidadPrioridad](/api/types/views#vwunidadprioridad) - Priority truck view
+- [ConfigSimulador](/api/types/bahia-config#configsimulador) - Simulator configuration with alert thresholds
+
+## Source
+
+Defined in `src/types.ts:3-30`

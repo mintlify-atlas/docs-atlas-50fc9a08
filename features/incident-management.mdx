@@ -1,0 +1,457 @@
+---
+title: Incident Management
+description: Track operational delays with automatic time deduction from net patio averages
+icon: triangle-exclamation
+---
+
+## Overview
+
+The incident management system allows operators to record and track delays caused by equipment failures, documentation issues, or other operational interruptions. Incident time is automatically excluded from net patio time calculations, providing accurate performance metrics.
+
+## Incident Workflow
+
+<Steps>
+  <Step title="Open Incident">
+    Click **"⚠️ Incid."** button on any bay with an active truck
+  </Step>
+  <Step title="Record Start Time">
+    System writes `hora_inicio` to Supabase `incidencias` table
+  </Step>
+  <Step title="Active Indicator">
+    Red pulsing dot appears on bay overlay while incident is open
+  </Step>
+  <Step title="Close Incident">
+    Click **"🟢 Cerrar incidencia"** when issue is resolved
+  </Step>
+  <Step title="Calculate Duration">
+    Supabase computes `duracion_calculada = hora_fin - hora_inicio`
+  </Step>
+  <Step title="Update Averages">
+    Net patio time view automatically excludes incident duration
+  </Step>
+</Steps>
+
+## Database Schema
+
+```sql
+CREATE TABLE incidencias (
+  id_incidencia SERIAL PRIMARY KEY,
+  id_camion INTEGER NOT NULL REFERENCES viajes_camiones(id),
+  hora_inicio TIME NOT NULL,
+  hora_fin TIME,
+  duracion_calculada INTERVAL GENERATED ALWAYS AS (
+    CASE 
+      WHEN hora_fin IS NOT NULL 
+      THEN hora_fin - hora_inicio 
+      ELSE NULL 
+    END
+  ) STORED
+);
+```
+
+**Key Fields:**
+- `id_camion`: Foreign key to `viajes_camiones.id`
+- `hora_inicio`: Time incident started (set when opening)
+- `hora_fin`: Time incident ended (null while open)
+- `duracion_calculada`: Computed column (read-only)
+
+## Opening an Incident
+
+### UI Button
+
+The incident button appears on occupied bays:
+
+```typescript
+// BahiaOverlay.tsx
+<button
+  onClick={e => { 
+    e.stopPropagation(); 
+    setShowIncidencia(true); 
+  }}
+  title="Registrar incidencia"
+  style={{
+    flex: 1,
+    padding: '3px 0',
+    borderRadius: 5,
+    border: 'none',
+    background: 'rgba(245,158,11,0.18)',
+    color: '#fbbf24',
+    fontSize: '0.65rem',
+    fontWeight: 700,
+    cursor: 'pointer',
+  }}
+>
+  ⚠️ Incid.
+</button>
+```
+
+### Modal Interface
+
+```typescript
+// ModalIncidencia.tsx
+interface Props {
+  show: boolean;
+  camion: Camion;
+  bahiaNombre: string;
+  onClose: () => void;
+  onNotify: (msg: string, tipo?: 'success' | 'error' | 'info') => void;
+  onIncidenciaRegistrada: (camionId: string) => void;
+}
+```
+
+### Insert Query
+
+```typescript
+export async function abrirIncidencia(id_camion: number): Promise<IncidenciaRow | null> {
+  const { data, error } = await supabase
+    .from('incidencias')
+    .insert({
+      id_camion,
+      hora_inicio: horaActualTime(),
+      hora_fin: null,
+    })
+    .select()
+    .maybeSingle();
+
+  if (error) return manejarError('abrirIncidencia', error);
+  return data as IncidenciaRow | null;
+}
+
+function horaActualTime(): string {
+  return new Date().toLocaleTimeString('es-PE', { hour12: false }); // "HH:MM:SS"
+}
+```
+
+## Closing an Incident
+
+### Update Query
+
+```typescript
+export async function cerrarIncidencia(id_camion: number): Promise<IncidenciaRow | null> {
+  const { data, error } = await supabase
+    .from('incidencias')
+    .update({ hora_fin: horaActualTime() })
+    .eq('id_camion', id_camion)
+    .is('hora_fin', null)  // Only update open incidents
+    .select()
+    .maybeSingle();
+
+  if (error) return manejarError('cerrarIncidencia', error);
+  if (!data) {
+    console.warn('[supabaseService] No open incident found for id_camion =', id_camion);
+    return null;
+  }
+  return data as IncidenciaRow;
+}
+```
+
+<Warning>
+The `.is('hora_fin', null)` filter ensures only **open** incidents are closed. If no open incident exists, the update returns null.
+</Warning>
+
+## Incident Counter
+
+The modal displays a visual counter showing up to 3 incidents:
+
+```typescript
+const MAX_INCIDENCIAS = 3;
+
+<div style={{ display: 'flex', gap: 6, marginBottom: hayAbierta ? 8 : 0 }}>
+  {Array.from({ length: MAX_INCIDENCIAS }).map((_, i) => (
+    <div key={`slot-${i}`} style={{
+      width: 32,
+      height: 32,
+      borderRadius: 7,
+      background: i < conteoLocal
+        ? (i < conteoLocal - (hayAbierta ? 1 : 0) ? '#f59e0b' : '#ef4444')
+        : 'rgba(148,163,184,0.1)',
+      border: `1px solid ${i < conteoLocal ? '#f59e0b' : 'rgba(148,163,184,0.2)'}`,
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'center',
+      fontSize: '0.75rem',
+      fontWeight: 700,
+      color: i < conteoLocal ? '#000' : '#475569',
+      boxShadow: i === conteoLocal - 1 && hayAbierta ? '0 0 8px #ef4444' : 'none',
+      animation: i === conteoLocal - 1 && hayAbierta ? 'pulse 1s infinite' : 'none',
+    }}>
+      {i < conteoLocal ? (i < conteoLocal - (hayAbierta ? 1 : 0) ? '✓' : '●') : i + 1}
+    </div>
+  ))}
+</div>
+```
+
+**Visual States:**
+- **Empty slot**: Gray box with number (1, 2, 3)
+- **Closed incident**: Orange box with checkmark (✓)
+- **Open incident**: Red pulsing box with dot (●)
+
+## Maximum Incident Limit
+
+Trucks are limited to **3 incidents** per session:
+
+```typescript
+const handleRegistrar = async () => {
+  if (limiteSuperado) {
+    onNotify(
+      '🚨 Límite de 3 incidencias alcanzado. Contactar a los desarrolladores.',
+      'error'
+    );
+    return;
+  }
+
+  if (hayAbierta) {
+    onNotify(
+      '⚠️ Ya hay una incidencia abierta. Ciérrala antes de abrir una nueva.',
+      'error'
+    );
+    return;
+  }
+
+  setLoading(true);
+  const resultado = await abrirIncidencia(camion.id_db);
+  setLoading(false);
+
+  if (resultado) {
+    onIncidenciaRegistrada(camion.id);
+    onNotify(
+      `⚠️ Incidencia ${conteoLocal + 1}/${MAX_INCIDENCIAS} abierta — ${camion.placa}`,
+      'success'
+    );
+    onClose();
+  } else {
+    onNotify(
+      '❌ Error al abrir la incidencia en Supabase. Verifica la conexión.',
+      'error'
+    );
+  }
+};
+```
+
+<Note>
+When a truck reaches 3 incidents, the modal blocks further registrations and displays a warning message.
+</Note>
+
+## Active Incident Indicator
+
+Bays with open incidents show a pulsing red dot:
+
+```typescript
+// BahiaOverlay.tsx - Polling every 8 seconds
+useEffect(() => {
+  if (!camion?.id_db) {
+    startTransition(() => setIncidenciaActiva(false));
+    return;
+  }
+
+  const idCamion = Number(camion.id_db);
+  fetchIncidenciaAbierta(idCamion).then(setIncidenciaActiva);
+
+  const poller = setInterval(() => {
+    fetchIncidenciaAbierta(idCamion).then(setIncidenciaActiva);
+  }, 8_000);
+
+  return () => clearInterval(poller);
+}, [camion?.id_db]);
+
+// Display indicator
+{incidenciaActiva && (
+  <span style={{
+    fontSize: '0.65rem',
+    animation: 'pulse 1s infinite',
+    lineHeight: 1,
+  }} title="Incidencia activa sin cerrar">
+    🔴
+  </span>
+)}
+```
+
+### Query Function
+
+```typescript
+export async function fetchIncidenciaAbierta(id_camion: number): Promise<boolean> {
+  const { count, error } = await supabase
+    .from('incidencias')
+    .select('*', { count: 'exact', head: true })
+    .eq('id_camion', id_camion)
+    .is('hora_fin', null);
+
+  if (error) {
+    manejarError('fetchIncidenciaAbierta', error);
+    return false;
+  }
+  return (count ?? 0) > 0;
+}
+```
+
+## Average Incident Duration
+
+The modal shows the average duration of **closed** incidents for the truck:
+
+```typescript
+export async function fetchPromedioIncidencias(id_camion: number): Promise<string | null> {
+  const { data, error } = await supabase
+    .from('incidencias')
+    .select('duracion_calculada')
+    .eq('id_camion', id_camion)
+    .not('hora_fin', 'is', null)     // Only closed incidents
+    .not('duracion_calculada', 'is', null);
+
+  if (error) {
+    manejarError('fetchPromedioIncidencias', error);
+    return null;
+  }
+  if (!data?.length) return null;
+
+  const minutos = (data as { duracion_calculada: string }[])
+    .map(r => intervalAMinutos(r.duracion_calculada))
+    .filter(m => m > 0);
+
+  if (!minutos.length) return null;
+
+  const promedioMin = minutos.reduce((a, b) => a + b, 0) / minutos.length;
+  const h = Math.floor(promedioMin / 60);
+  const m = Math.floor(promedioMin % 60);
+  const s = Math.floor((promedioMin % 1) * 60);
+  return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+}
+```
+
+**Display:**
+```typescript
+{promedioTexto && (
+  <Row label="⏱ Prom. incidencias" value={promedioTexto} />
+)}
+```
+
+## Net Patio Time Calculation
+
+The `vista_promedio_patio_neto` view automatically subtracts incident time:
+
+```sql
+CREATE VIEW vista_promedio_patio_neto AS
+SELECT 
+  AVG(
+    (hora_salida - hora_llegada) - COALESCE(
+      (SELECT SUM(duracion_calculada) 
+       FROM incidencias 
+       WHERE id_camion = viajes_camiones.id
+         AND hora_fin IS NOT NULL),  -- Only closed incidents
+      INTERVAL '0'
+    )
+  ) AS promedio_neto_patio
+FROM viajes_camiones
+WHERE estado = 'Finalizado'
+  AND fecha = CURRENT_DATE;
+```
+
+**Formula:**
+```
+Net Time = (hora_salida - hora_llegada) - SUM(incident durations)
+```
+
+<Warning>
+Only **closed** incidents (with `hora_fin` set) are deducted. Open incidents are excluded from the calculation.
+</Warning>
+
+## Polling Strategy
+
+The modal uses **HTTP polling** instead of Supabase Realtime to avoid additional costs:
+
+```typescript
+useEffect(() => {
+  if (!show || !camion.id_db) return;
+
+  const refrescar = () => {
+    contarIncidencias(camion.id_db).then(setConteoLocal);
+    fetchIncidenciaAbierta(camion.id_db).then(setHayAbierta);
+    fetchPromedioIncidencias(camion.id_db).then(t => 
+      setPromedioTexto(t ? intervalATexto(t) : null)
+    );
+  };
+
+  refrescar();  // Immediate load
+  const poller = setInterval(refrescar, 5_000);  // Refresh every 5s
+  return () => clearInterval(poller);
+}, [show, camion.id_db]);
+```
+
+**Why polling?**
+- **Lower cost**: No Realtime subscription fees
+- **Simpler architecture**: No WebSocket management
+- **Sufficient latency**: 5-8 second delays are acceptable for incident tracking
+
+## Button States
+
+### Open Button
+```typescript
+<button
+  style={{ opacity: (loading || hayAbierta) ? 0.45 : 1 }}
+  onClick={handleRegistrar}
+  disabled={loading || hayAbierta}
+  title={hayAbierta ? 'Cierra la incidencia activa antes de abrir una nueva' : ''}
+>
+  {loading ? '⏳' : '🔴 Abrir incidencia'}
+</button>
+```
+
+**Disabled when:**
+- Another incident is already open
+- API request is in progress
+- Limit of 3 incidents reached
+
+### Close Button
+```typescript
+<button
+  style={{ opacity: (loading || !hayAbierta) ? 0.45 : 1 }}
+  onClick={handleCerrar}
+  disabled={loading || !hayAbierta}
+  title={!hayAbierta ? 'No hay ninguna incidencia abierta' : ''}
+>
+  {loading ? '⏳' : '🟢 Cerrar incidencia'}
+</button>
+```
+
+**Disabled when:**
+- No open incident exists
+- API request is in progress
+
+## Count Synchronization
+
+The modal re-syncs the counter whenever the parent updates:
+
+```typescript
+useEffect(() => {
+  startTransition(() => {
+    setConteoLocal(camion.incidencias ?? 0);
+  });
+}, [camion.incidencias]);
+```
+
+<Note>
+`startTransition` marks the update as non-urgent, preventing UI blocking during re-renders.
+</Note>
+
+## Toast Notifications
+
+```typescript
+// Success
+onNotify(`⚠️ Incidencia ${conteoLocal + 1}/3 abierta — ${camion.placa}`, 'success');
+
+// Error
+onNotify('❌ Error al abrir la incidencia en Supabase. Verifica la conexión.', 'error');
+
+// Info
+onNotify('ℹ️ No hay ninguna incidencia abierta para cerrar.', 'info');
+```
+
+## Related Features
+
+<CardGroup cols={2}>
+  <Card title="Dashboard Panels" icon="chart-line" href="./dashboard-panels">
+    See how net patio time appears in the average panel
+  </Card>
+  <Card title="Role-Based Access" icon="shield" href="./role-based-access">
+    Learn which roles can register incidents
+  </Card>
+</CardGroup>

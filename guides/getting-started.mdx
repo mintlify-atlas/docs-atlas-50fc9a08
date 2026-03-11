@@ -1,0 +1,173 @@
+---
+title: Getting Started
+description: Learn how to access and navigate Dashboard Backus for the first time
+---
+
+## Overview
+
+Dashboard Backus is a real-time yard management system designed to monitor and optimize truck operations at the Backus logistics facility. This guide will help you get started with the platform.
+
+## System Requirements
+
+- Modern web browser (Chrome, Firefox, Safari, or Edge)
+- Stable internet connection
+- Valid user credentials (email and PIN)
+
+## Logging In
+
+<Steps>
+  <Step title="Access the Login Page">
+    Navigate to the Dashboard Backus URL provided by your administrator.
+  </Step>
+  
+  <Step title="Enter Your Credentials">
+    - **Email**: Your registered email address
+    - **PIN**: Your 4-6 digit personal identification number
+    
+    <Note>
+      Credentials are case-sensitive. Ensure your email is entered in lowercase.
+    </Note>
+  </Step>
+  
+  <Step title="Select Your Role">
+    The system automatically assigns your role based on your credentials:
+    - **Admin**: Full access to bay assignments, incident management, and reports
+    - **Client**: View-only access with fixed wait time thresholds (60/120 minutes)
+  </Step>
+</Steps>
+
+## Understanding the Interface
+
+### Main Components
+
+The Dashboard Backus interface consists of several key areas:
+
+1. **Header Bar**: Contains start/stop controls, dark mode toggle, help mode, and session management
+2. **Yard Map**: Visual representation of all bay locations with drag-and-drop functionality
+3. **Real-Time Panels**: Three live data panels showing priority alerts, average times, and shift counts
+4. **Queue Footer**: Horizontal scrollable list of trucks waiting for bay assignment
+5. **Traffic Light Legend**: Color-coded wait time indicators (green, yellow, red)
+
+### Real-Time Data Panels
+
+<CardGroup cols={3}>
+  <Card title="Priority Alert" icon="triangle-exclamation">
+    Displays the truck with the longest wait time, including plate number, arrival time, and current location.
+  </Card>
+  
+  <Card title="Average Yard Time" icon="clock">
+    Shows the net average time trucks spend in the yard (excluding incident downtime), calculated in real-time.
+  </Card>
+  
+  <Card title="Shift Count" icon="calculator">
+    Tracks the number of trucks processed during each shift:
+    - **T1**: 07:00-15:00
+    - **T2**: 15:01-23:00
+    - **T3**: 23:01-06:59
+  </Card>
+</CardGroup>
+
+## Starting a Session
+
+<Steps>
+  <Step title="Click 'Iniciar' (Start)">
+    Located in the header bar, this button opens the configuration modal.
+  </Step>
+  
+  <Step title="Configure Session Settings" icon="gear">
+    **For Admin Users**:
+    - **Mode**: Choose between Simulation (accelerated time, 1 second = 1 unit) or Real (1 minute = 1 unit)
+    - **Yellow Threshold**: Time before a truck enters the yellow warning state (default: 60 units)
+    - **Red Threshold**: Time before a truck enters the red critical state (default: 120 units)
+    
+    **For Client Users**:
+    - Thresholds are fixed at 60/120 minutes and cannot be modified
+    - Only Real mode is available
+  </Step>
+  
+  <Step title="Confirm Configuration">
+    Click "Confirmar" to start the session. The system will:
+    - Load all trucks currently in the queue from the database
+    - Begin polling for updates every 10 seconds (queue) and 15 seconds (panels)
+    - Activate drag-and-drop functionality for bay assignments
+  </Step>
+</Steps>
+
+<Warning>
+  Once a session is active, you cannot modify configuration settings without stopping and restarting the session.
+</Warning>
+
+## Navigation Tips
+
+### Dark Mode Toggle
+
+Click the moon/sun icon in the header to switch between dark and light themes. Dark mode is enabled by default for reduced eye strain during long shifts.
+
+### Help Mode
+
+Enable Help Mode (lightbulb icon) to:
+- Highlight compatible bays in **green** when dragging a truck
+- Show incompatible bays in **red** with validation messages
+- Increase map brightness for better visibility
+
+<Tip>
+  Help Mode is especially useful when learning bay compatibility rules or training new operators.
+</Tip>
+
+## Understanding Traffic Light System
+
+The system uses a color-coded traffic light system to indicate truck wait times:
+
+| Color | Meaning | Action Required |
+|-------|---------|----------------|
+| 🟢 **Green** | Wait time below yellow threshold | Normal priority |
+| 🟡 **Yellow** | Wait time between yellow and red thresholds | Elevated priority - assign soon |
+| 🔴 **Red** | Wait time exceeds red threshold | Critical priority - assign immediately |
+
+<Note>
+  The traffic light color follows each truck from the queue into the bay, providing continuous visibility of wait times.
+</Note>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Bay Assignment" icon="truck-ramp-box" href="/guides/bay-assignment">
+    Learn how to assign trucks to bays using drag-and-drop functionality
+  </Card>
+  
+  <Card title="Monitoring Operations" icon="chart-line" href="/guides/monitoring-operations">
+    Track real-time metrics and identify bottlenecks in yard operations
+  </Card>
+  
+  <Card title="Handling Incidents" icon="triangle-exclamation" href="/guides/handling-incidents">
+    Register and manage operational incidents that affect truck processing times
+  </Card>
+  
+  <Card title="Generating Reports" icon="file-chart-column" href="/guides/reports">
+    Access session reports and historical performance data
+  </Card>
+</CardGroup>
+
+## Troubleshooting
+
+### Session Won't Start
+
+- Verify your internet connection is stable
+- Check that you have active user credentials
+- Try refreshing the browser page
+
+### Trucks Not Appearing in Queue
+
+- Ensure the session is active ("Iniciar" button shows "Detener")
+- Verify trucks have status "En cola" in the database
+- Wait for the next polling cycle (10 seconds)
+
+### Data Not Updating
+
+- Check console for connection errors
+- Verify Supabase connection status
+- Stop and restart the session if issues persist
+
+<Info>
+  The system polls the database every 10 seconds for queue updates and every 15 seconds for panel data. Brief delays are normal during high-traffic periods.
+</Info>

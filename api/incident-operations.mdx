@@ -1,0 +1,376 @@
+---
+title: 'Incident Operations'
+description: 'API reference for managing truck incidents'
+icon: 'triangle-exclamation'
+---
+
+## Overview
+
+Incident operations handle the full lifecycle of incidents in the `incidencias` table. Each incident is linked to a truck via `id_camion` (foreign key to `viajes_camiones.id`) and tracks start time, end time, and calculated duration.
+
+## Database Schema
+
+The `incidencias` table structure:
+
+```sql
+CREATE TABLE incidencias (
+  id_incidencia SERIAL PRIMARY KEY,
+  id_camion INTEGER REFERENCES viajes_camiones(id),
+  hora_inicio TIME NOT NULL,
+  hora_fin TIME,
+  duracion_calculada INTERVAL GENERATED ALWAYS AS (hora_fin - hora_inicio)
+);
+```
+
+## abrirIncidencia
+
+Creates a new incident record with the current time as `hora_inicio`.
+
+```typescript
+export async function abrirIncidencia(id_camion: number): Promise<IncidenciaRow | null>
+```
+
+### Parameters
+
+<ParamField path="id_camion" type="number" required>
+  The database ID (primary key) of the truck from `viajes_camiones.id`. **Not** the `id_viaje` string.
+</ParamField>
+
+### Return Value
+
+<ResponseField name="return" type="IncidenciaRow | null">
+  The newly created incident record, or null if the operation failed.
+</ResponseField>
+
+### Implementation Details
+
+The function:
+1. Captures current time in "HH:MM:SS" format
+2. Inserts a new record with `hora_fin = null`
+3. Uses `.maybeSingle()` to avoid 406 errors if no row is returned
+
+```typescript
+const { data, error } = await supabase
+  .from('incidencias')
+  .insert({
+    id_camion,
+    hora_inicio: horaActualTime(),
+    hora_fin: null,
+  })
+  .select()
+  .maybeSingle();
+```
+
+### Example Usage
+
+```typescript
+import { abrirIncidencia } from './services/supabaseService';
+
+// Open incident for truck with database ID 42
+const incident = await abrirIncidencia(42);
+
+if (incident) {
+  console.log(`Incident ${incident.id_incidencia} opened at ${incident.hora_inicio}`);
+} else {
+  console.error('Failed to open incident');
+}
+```
+
+### Real-world Example
+
+```typescript
+// In a React component handling incident button click
+async function handleOpenIncident(truck: Camion) {
+  const incident = await abrirIncidencia(truck.id_db);
+  
+  if (incident) {
+    // Update UI to show incident is active
+    setIncidentActive(true);
+    setIncidentStartTime(incident.hora_inicio);
+    
+    // Optionally refresh incident count
+    const count = await contarIncidencias(truck.id_db);
+    setIncidentCount(count);
+  }
+}
+```
+
+## cerrarIncidencia
+
+Closes the most recent open incident for a truck by setting `hora_fin` to the current time.
+
+```typescript
+export async function cerrarIncidencia(id_camion: number): Promise<IncidenciaRow | null>
+```
+
+### Parameters
+
+<ParamField path="id_camion" type="number" required>
+  The database ID (primary key) of the truck from `viajes_camiones.id`.
+</ParamField>
+
+### Return Value
+
+<ResponseField name="return" type="IncidenciaRow | null">
+  The updated incident record with `hora_fin` set, or null if no open incident exists or the operation failed.
+</ResponseField>
+
+### Implementation Details
+
+This is a **single query UPDATE** operation with no race conditions:
+
+```typescript
+const { data, error } = await supabase
+  .from('incidencias')
+  .update({ hora_fin: horaActualTime() })
+  .eq('id_camion', id_camion)
+  .is('hora_fin', null)          // Only update open incidents
+  .select()
+  .maybeSingle();                // Return the first updated row
+```
+
+### Example Usage
+
+```typescript
+import { cerrarIncidencia } from './services/supabaseService';
+
+// Close incident for truck with database ID 42
+const incident = await cerrarIncidencia(42);
+
+if (incident) {
+  console.log(`Incident ${incident.id_incidencia} closed at ${incident.hora_fin}`);
+  console.log(`Duration: ${incident.duracion_calculada}`);
+} else {
+  console.warn('No open incident found for this truck');
+}
+```
+
+### Real-world Example
+
+```typescript
+// Handling incident resolution
+async function handleCloseIncident(truck: Camion) {
+  const incident = await cerrarIncidencia(truck.id_db);
+  
+  if (!incident) {
+    alert('No open incident found for this truck');
+    return;
+  }
+  
+  // Update UI
+  setIncidentActive(false);
+  
+  // Show duration using utility function
+  const duration = intervalATexto(incident.duracion_calculada);
+  console.log(`Incident resolved in ${duration}`);
+  
+  // Refresh total count
+  const count = await contarIncidencias(truck.id_db);
+  setIncidentCount(count);
+}
+```
+
+## contarIncidencias
+
+Counts the total number of incidents (both open and closed) for a truck.
+
+```typescript
+export async function contarIncidencias(id_camion: number): Promise<number>
+```
+
+### Parameters
+
+<ParamField path="id_camion" type="number" required>
+  The database ID of the truck.
+</ParamField>
+
+### Return Value
+
+<ResponseField name="return" type="number">
+  Total count of incidents (0 on error or if no incidents exist).
+</ResponseField>
+
+### Example Usage
+
+```typescript
+import { contarIncidencias } from './services/supabaseService';
+
+const count = await contarIncidencias(42);
+console.log(`Truck has ${count} total incidents`);
+```
+
+## fetchIncidenciaAbierta
+
+Checks if a truck has any open incidents (where `hora_fin IS NULL`).
+
+```typescript
+export async function fetchIncidenciaAbierta(id_camion: number): Promise<boolean>
+```
+
+### Parameters
+
+<ParamField path="id_camion" type="number" required>
+  The database ID of the truck.
+</ParamField>
+
+### Return Value
+
+<ResponseField name="return" type="boolean">
+  `true` if at least one open incident exists, `false` otherwise.
+</ResponseField>
+
+### Usage in UI
+
+Commonly used in the BahiaOverlay component to show pulsing alert icons:
+
+```typescript
+import { useEffect, useState } from 'react';
+import { fetchIncidenciaAbierta } from './services/supabaseService';
+
+function BayOverlay({ truck }: { truck: Camion }) {
+  const [hasOpenIncident, setHasOpenIncident] = useState(false);
+
+  useEffect(() => {
+    async function checkIncident() {
+      const isOpen = await fetchIncidenciaAbierta(truck.id_db);
+      setHasOpenIncident(isOpen);
+    }
+    checkIncident();
+  }, [truck.id_db]);
+
+  return (
+    <div>
+      {hasOpenIncident && <AlertIcon className="pulsing" />}
+      {/* rest of overlay */}
+    </div>
+  );
+}
+```
+
+## fetchPromedioIncidencias
+
+Calculates the average duration of all **closed** incidents for a truck.
+
+```typescript
+export async function fetchPromedioIncidencias(id_camion: number): Promise<string | null>
+```
+
+### Parameters
+
+<ParamField path="id_camion" type="number" required>
+  The database ID of the truck.
+</ParamField>
+
+### Return Value
+
+<ResponseField name="return" type="string | null">
+  Average duration in "HH:MM:SS" format (PostgreSQL interval), or null if no closed incidents exist.
+</ResponseField>
+
+### Implementation Details
+
+The function:
+1. Fetches all `duracion_calculada` values for closed incidents
+2. Converts each interval to minutes using `intervalAMinutos`
+3. Calculates the average
+4. Formats back to "HH:MM:SS" format
+
+```typescript
+const { data, error } = await supabase
+  .from('incidencias')
+  .select('duracion_calculada')
+  .eq('id_camion', id_camion)
+  .not('hora_fin', 'is', null)     // Only closed incidents
+  .not('duracion_calculada', 'is', null);
+
+// Calculate average in minutes
+const minutos = data.map(r => intervalAMinutos(r.duracion_calculada));
+const promedioMin = minutos.reduce((a, b) => a + b, 0) / minutos.length;
+
+// Format as HH:MM:SS
+const h = Math.floor(promedioMin / 60);
+const m = Math.floor(promedioMin % 60);
+const s = Math.floor((promedioMin % 1) * 60);
+return `${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
+```
+
+### Example Usage
+
+```typescript
+import { fetchPromedioIncidencias, intervalATexto } from './services/supabaseService';
+
+const avgDuration = await fetchPromedioIncidencias(42);
+
+if (avgDuration) {
+  const readable = intervalATexto(avgDuration);
+  console.log(`Average incident duration: ${readable}`);
+} else {
+  console.log('No closed incidents yet');
+}
+```
+
+### Real-world Example
+
+```typescript
+// Display incident statistics in a modal
+async function showIncidentStats(truck: Camion) {
+  const [count, hasOpen, avgDuration] = await Promise.all([
+    contarIncidencias(truck.id_db),
+    fetchIncidenciaAbierta(truck.id_db),
+    fetchPromedioIncidencias(truck.id_db),
+  ]);
+
+  return (
+    <Modal>
+      <h3>Incident Statistics</h3>
+      <p>Total incidents: {count}</p>
+      <p>Open incident: {hasOpen ? 'Yes' : 'No'}</p>
+      <p>Average duration: {avgDuration ? intervalATexto(avgDuration) : 'N/A'}</p>
+    </Modal>
+  );
+}
+```
+
+## Error Handling
+
+All incident functions use the centralized error handler:
+
+```typescript
+function manejarError(contexto: string, error: unknown): null {
+  const msg = error instanceof Error ? error.message : String(error);
+  console.error(`[supabaseService] ${contexto}:`, msg);
+  return null;
+}
+```
+
+- **No exceptions thrown** - Safe to use without try-catch
+- **Errors logged to console** - Easy debugging in development
+- **Graceful degradation** - Returns null/0/false on failure
+
+## Time Format Utilities
+
+Incident times use PostgreSQL TIME format ("HH:MM:SS"):
+
+```typescript
+function horaActualTime(): string {
+  return new Date().toLocaleTimeString('es-PE', { hour12: false }); // "HH:mm:ss"
+}
+```
+
+Durations are returned as PostgreSQL intervals and can be formatted using:
+
+- `intervalAMinutos(interval)` - Convert to minutes (number)
+- `intervalATexto(interval)` - Convert to readable text ("2h 30m")
+
+See [Supabase Service Overview](./supabase-service#utility-functions) for full documentation.
+
+## Related Operations
+
+<CardGroup cols={2}>
+  <Card title="Queue Operations" icon="truck" href="./queue-operations">
+    Fetch trucks that may have incidents
+  </Card>
+  <Card title="Trip Operations" icon="route" href="./trip-operations">
+    Update truck status when resolving incidents
+  </Card>
+</CardGroup>

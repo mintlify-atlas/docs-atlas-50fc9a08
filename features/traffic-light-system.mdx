@@ -1,0 +1,390 @@
+---
+title: Traffic Light System
+description: Color-coded queue monitoring with configurable thresholds for wait time alerts
+icon: traffic-light
+---
+
+## Overview
+
+The traffic light system provides visual alerts when trucks spend too long in queue or in bays. Colors change from green → yellow → red based on configurable time thresholds, helping operators prioritize urgent assignments.
+
+## Traffic Light States
+
+<CardGroup cols={3}>
+  <Card title="Green" icon="circle" color="#22c55e">
+    **Normal** — Within acceptable wait time  
+    Real mode: ≤ 60 minutes  
+    Simulation: ≤ 60 seconds
+  </Card>
+  <Card title="Yellow" icon="circle" color="#eab308">
+    **Warning** — Approaching limit  
+    Real mode: 61–120 minutes  
+    Simulation: 61–120 seconds
+  </Card>
+  <Card title="Red" icon="circle" color="#ef4444">
+    **Critical** — Exceeded threshold  
+    Real mode: ≥ 121 minutes  
+    Simulation: ≥ 121 seconds
+  </Card>
+</CardGroup>
+
+## Default Thresholds
+
+### Real Mode (Production)
+
+```typescript
+const config: ConfigSimulador = {
+  modo: 'real',
+  tiempoAmarillo: 60,   // minutes
+  tiempoRojo: 120,      // minutes
+  rol: 'admin',
+};
+```
+
+**Conversion factor:** `60_000 ms` (1 minute)
+
+### Simulation Mode (Testing)
+
+```typescript
+const config: ConfigSimulador = {
+  modo: 'simulacion',
+  tiempoAmarillo: 60,   // seconds
+  tiempoRojo: 120,      // seconds
+  rol: 'admin',
+};
+```
+
+**Conversion factor:** `1_000 ms` (1 second)
+
+<Note>
+Simulation mode uses the same numeric values as real mode, but interprets them as seconds instead of minutes. This allows for rapid testing without waiting hours.
+</Note>
+
+## Role-Based Configuration
+
+### Admin Users
+
+Admins can customize thresholds in the configuration modal:
+
+```typescript
+// ModalConfig.tsx
+<input
+  type="number"
+  min="1"
+  max="999"
+  value={config.tiempoAmarillo}
+  onChange={e => setConfig({
+    ...config,
+    tiempoAmarillo: Number(e.target.value)
+  })}
+/>
+```
+
+### Client Users (Read-Only)
+
+Clients have **fixed thresholds** that cannot be modified:
+
+```typescript
+// SimuladorMapa.tsx
+const TIEMPOS_CLIENTE = { 
+  tiempoAmarillo: 60, 
+  tiempoRojo: 120 
+} as const;
+
+const configFinal: ConfigSimulador = rolInicial === 'cliente'
+  ? { ...config, rol: 'cliente', ...TIEMPOS_CLIENTE }
+  : { ...config, rol: 'admin' };
+```
+
+<Warning>
+Client users **cannot** edit threshold values. Any attempt to modify them in the config modal is ignored, and the fixed values `60/120` are enforced.
+</Warning>
+
+## Real-Time Color Updates
+
+The traffic light runs on a 1-second interval, updating all trucks in the queue:
+
+```typescript
+useEffect(() => {
+  if (!simulacionActiva) return;
+
+  const factor = config.modo === 'real' ? 60_000 : 1_000;
+
+  const interval = setInterval(() => {
+    setCola(prev => prev.map(c => {
+      const unidad = (Date.now() - c.tiempoLlegadaCola) / factor;
+      
+      const estado: EstadoAlerta =
+        unidad >= config.tiempoRojo ? 'rojo' :
+        unidad >= config.tiempoAmarillo ? 'amarillo' : 'verde';
+
+      const maxAlerta: EstadoAlerta =
+        estado === 'rojo' ? 'rojo' :
+        (c.maxAlertaReached === 'rojo' ? 'rojo' : estado);
+
+      return {
+        ...c,
+        estadoAlerta: estado,
+        maxAlertaReached: maxAlerta
+      };
+    }));
+  }, 1_000);
+
+  return () => clearInterval(interval);
+}, [simulacionActiva, config.modo, config.tiempoAmarillo, config.tiempoRojo]);
+```
+
+### Key Logic
+
+1. **Time Calculation**
+   - Elapsed time = `(Date.now() - tiempoLlegadaCola) / factor`
+   - Factor = 60,000 (real) or 1,000 (simulation)
+
+2. **State Determination**
+   - `>= tiempoRojo` → Red
+   - `>= tiempoAmarillo` → Yellow
+   - `< tiempoAmarillo` → Green
+
+3. **Max Alert Tracking**
+   - Once a truck reaches red, `maxAlertaReached` stays red
+   - Used for historical reports and KPI tracking
+
+## Visual Indicators
+
+### Truck Cards (Queue)
+
+Each truck card displays its current traffic light state:
+
+```typescript
+// TarjetaCamion.tsx
+const colorSemaforo = getColorEstado(camion.estadoAlerta);
+
+<div style={{
+  border: `2px solid ${colorSemaforo}`,
+  boxShadow: `0 0 12px ${colorSemaforo}55`,
+}}>
+  <div style={{ color: colorSemaforo, fontWeight: 700 }}>
+    ⏱ {formatTiempo(Date.now() - camion.tiempoLlegadaCola, config.modo)}
+  </div>
+</div>
+```
+
+### Bay Overlays
+
+When a truck is assigned to a bay, the bay's border and glow match the traffic light state:
+
+```typescript
+// BahiaOverlay.tsx
+let colorSemaforo = darkMode ? '#334155' : '#cbd5e1';
+
+if (ocupada && camion) {
+  const ms = now - camion.tiempoLlegadaCola;
+  const factor = modoConfig.modo === 'real' ? 60_000 : 1_000;
+  const unidades = ms / factor;
+
+  if      (unidades >= modoConfig.tiempoRojo)    colorSemaforo = '#ef4444';
+  else if (unidades >= modoConfig.tiempoAmarillo) colorSemaforo = '#eab308';
+  else                                            colorSemaforo = '#22c55e';
+}
+
+<div style={{
+  border: `2px solid ${colorSemaforo}`,
+  boxShadow: ocupada
+    ? `0 0 18px ${colorSemaforo}55, 0 4px 14px rgba(0,0,0,0.5)`
+    : '0 4px 14px rgba(0,0,0,0.4)',
+}}>
+  {/* Bay content */}
+</div>
+```
+
+### Progress Bar
+
+Bays show a visual progress bar that fills as time approaches the red threshold:
+
+```typescript
+<div style={{
+  marginTop: 5,
+  height: 3,
+  borderRadius: 2,
+  background: `${colorSemaforo}30`,
+}}>
+  <div style={{
+    height: '100%',
+    borderRadius: 2,
+    background: colorSemaforo,
+    width: `${Math.min(
+      ((now - camion.tiempoLlegadaCola) / factor / config.tiempoRojo) * 100,
+      100
+    )}%`,
+    transition: 'width 1s linear, background 0.5s',
+  }} />
+</div>
+```
+
+## Map Legend
+
+The bottom-right corner of the map displays the current thresholds:
+
+```typescript
+<div className="absolute bottom-2 right-3 z-30 rounded-lg backdrop-blur-md">
+  <div className="font-bold mb-1 uppercase tracking-widest">
+    Semáforo de Espera
+  </div>
+  {[
+    {
+      color: '#22c55e',
+      label: `Verde ≤ ${config.tiempoAmarillo - 1} ${config.modo === 'simulacion' ? 's' : 'min'}`
+    },
+    {
+      color: '#eab308',
+      label: `Amarillo ${config.tiempoAmarillo}–${config.tiempoRojo - 1} ${config.modo === 'simulacion' ? 's' : 'min'}`
+    },
+    {
+      color: '#ef4444',
+      label: `Rojo ≥ ${config.tiempoRojo} ${config.modo === 'simulacion' ? 's' : 'min'}`
+    },
+  ].map(l => (
+    <div key={l.color} className="flex items-center gap-1.5 mt-0.5">
+      <div className="w-2 h-2 rounded-full" style={{ background: l.color }} />
+      {l.label}
+    </div>
+  ))}
+</div>
+```
+
+<Note>
+The legend automatically updates when thresholds are changed or when switching between real/simulation modes.
+</Note>
+
+## Time Formatting
+
+The system displays elapsed time in human-readable format:
+
+```typescript
+const formatTiempo = (ms: number, modo: ConfigSimulador['modo']) => {
+  if (modo === 'real') {
+    const min = Math.floor(ms / 60_000);
+    const h = Math.floor(min / 60);
+    const m = min % 60;
+    return h > 0 ? `${h}h ${m}m` : `${m}m`;
+  }
+  return `${Math.floor(ms / 1000)}s`;
+};
+
+// Examples:
+formatTiempo(125000, 'simulacion')  // "125s"
+formatTiempo(7200000, 'real')       // "2h 0m"
+formatTiempo(3900000, 'real')       // "1h 5m"
+```
+
+## Pulse Animation (Red State)
+
+When a truck reaches red status, the traffic light dot pulses to draw attention:
+
+```typescript
+<span style={{
+  width: 9,
+  height: 9,
+  borderRadius: '50%',
+  background: ocupada ? colorSemaforo : '#1e293b',
+  boxShadow: ocupada ? `0 0 6px ${colorSemaforo}` : 'none',
+  animation: ocupada && colorSemaforo === '#ef4444'
+    ? 'pulse 1s infinite'
+    : 'none',
+}} />
+```
+
+**CSS Animation:**
+```css
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
+}
+```
+
+## Priority Panel Integration
+
+The "Unidad Mayor Prioridad" panel shows the truck with the longest wait time:
+
+```typescript
+// supabaseService.ts
+export async function fetchUnidadPrioridad(): Promise<VwUnidadPrioridad | null> {
+  const { data, error } = await supabase
+    .from('vista_unidad_prioridad')
+    .select('tracto, hora_llegada, bahia_actual, tiempo_transcurrido')
+    .limit(1)
+    .maybeSingle();
+
+  return data as VwUnidadPrioridad | null;
+}
+
+// Display in panel
+<div className="font-extrabold tracking-wider text-red-400">
+  {panelPrioridad.tracto}
+</div>
+<span className="rounded-full px-2 py-0.5 font-bold text-black bg-red-400">
+  ⏱ {intervalATexto(panelPrioridad.tiempo_transcurrido)}
+</span>
+```
+
+<Warning>
+The priority panel always shows data in **real-time from Supabase**, regardless of simulation mode settings.
+</Warning>
+
+## Configuration Modal
+
+<Steps>
+  <Step title="Open Configuration">
+    Click **"▶ Iniciar"** in the header toolbar
+  </Step>
+  <Step title="Select Mode">
+    Choose **Simulación** (testing) or **Real** (production)
+  </Step>
+  <Step title="Set Thresholds (Admin Only)">
+    Adjust `tiempoAmarillo` and `tiempoRojo` values
+  </Step>
+  <Step title="Confirm">
+    Click **Confirmar** to apply changes
+  </Step>
+</Steps>
+
+**Client Users:**
+Threshold fields are visible but grayed out. Values default to 60/120 and cannot be changed.
+
+## Database Integration
+
+The traffic light state is **not** stored in Supabase. It's calculated in real-time on the frontend based on:
+
+1. `hora_llegada` from `viajes_camiones` table
+2. Current timestamp (`Date.now()`)
+3. Configuration thresholds
+
+**Why client-side?**
+- Reduces database writes (no constant color updates)
+- Ensures instant feedback (no network latency)
+- Allows per-user threshold customization
+
+## Performance Optimization
+
+The 1-second interval only updates **in-memory state**, avoiding expensive DOM operations:
+
+```typescript
+// Efficient: Only updates React state
+setCola(prev => prev.map(c => ({
+  ...c,
+  estadoAlerta: nuevoEstado,
+})));
+
+// React batches these updates and only re-renders changed cards
+```
+
+## Related Features
+
+<CardGroup cols={2}>
+  <Card title="Dashboard Panels" icon="chart-line" href="./dashboard-panels">
+    Learn how the priority panel uses traffic light data
+  </Card>
+  <Card title="Role-Based Access" icon="shield" href="./role-based-access">
+    Understand admin vs. client permissions
+  </Card>
+</CardGroup>

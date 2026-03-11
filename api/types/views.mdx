@@ -1,0 +1,378 @@
+---
+title: 'Database Views'
+description: 'Read-only Supabase view interfaces for dashboard metrics'
+icon: 'chart-line'
+---
+
+## Overview
+
+These interfaces map to read-only Supabase database views that provide aggregated metrics for the dashboard panels. All time intervals are returned as PostgreSQL interval strings (e.g., "HH:MM:SS").
+
+## VwUnidadPrioridad
+
+Highest priority truck currently waiting in the system.
+
+**Database View**: `vista_unidad_prioridad`
+
+**Query Logic**: Returns the truck with the longest wait time where `estado ≠ 'Finalizado'`, ordered by `hora_llegada` ascending.
+
+<ResponseField name="tracto" type="string" required>
+  License plate number of the truck
+</ResponseField>
+
+<ResponseField name="hora_llegada" type="string" required>
+  Arrival time in "HH:MM:SS" format (24-hour)
+</ResponseField>
+
+<ResponseField name="bahia_actual" type="string | null" required>
+  Current bay assignment (e.g., "b1", "b10") or `null` if still in queue
+</ResponseField>
+
+<ResponseField name="tiempo_transcurrido" type="string" required>
+  Time elapsed since arrival as PostgreSQL interval string
+  
+  Format: `"HH:MM:SS+00"` or `"HH:MM:SS.mmm+00"` with timezone offset
+  
+  Example: `"02:15:30+00"` = 2 hours, 15 minutes, 30 seconds
+</ResponseField>
+
+### Usage Example
+
+```typescript
+import { 
+  fetchUnidadPrioridad, 
+  intervalATexto 
+} from './services/supabaseService';
+import type { VwUnidadPrioridad } from './types';
+
+// Fetch highest priority truck
+const priority: VwUnidadPrioridad | null = await fetchUnidadPrioridad();
+
+if (priority) {
+  console.log(`Priority truck: ${priority.tracto}`);
+  console.log(`Arrived at: ${priority.hora_llegada}`);
+  console.log(`Current bay: ${priority.bahia_actual ?? 'In queue'}`);
+  
+  // Convert interval to readable text
+  const waitTime = intervalATexto(priority.tiempo_transcurrido);
+  console.log(`Waiting for: ${waitTime}`); // e.g., "2h 15m"
+}
+```
+
+### Display in Panel Component
+
+```typescript
+function PanelPrioridad({ data }: { data: VwUnidadPrioridad | null }) {
+  if (!data) {
+    return <div>No hay unidades esperando</div>;
+  }
+  
+  return (
+    <div className="panel">
+      <h3>Unidad con Mayor Prioridad</h3>
+      <div className="tracto">{data.tracto}</div>
+      <div className="time">{intervalATexto(data.tiempo_transcurrido)}</div>
+      <div className="location">
+        {data.bahia_actual || 'En cola'}
+      </div>
+    </div>
+  );
+}
+```
+
+## VwDashboardTurnos
+
+Daily shift completion counts for finished trucks.
+
+**Database View**: `vista_dashboard_turnos`
+
+**Query Logic**: Groups finalized trucks by date and shift, counting units with `estado = 'Finalizado'`.
+
+**Data Grain**: One row per date. Frontend filters for today's date.
+
+<ResponseField name="fecha" type="string" required>
+  Date in "YYYY-MM-DD" format
+</ResponseField>
+
+<ResponseField name="turno_1" type="number" required>
+  Count of trucks finalized during Shift 1 (07:00–15:00)
+</ResponseField>
+
+<ResponseField name="turno_2" type="number" required>
+  Count of trucks finalized during Shift 2 (15:01–23:00)
+</ResponseField>
+
+<ResponseField name="turno_3" type="number" required>
+  Count of trucks finalized during Shift 3 (23:01–06:59)
+</ResponseField>
+
+### Shift Definitions
+
+| Shift | Time Range | Description |
+|-------|------------|-------------|
+| **1** | 07:00–15:00 | Morning shift (8 hours) |
+| **2** | 15:01–23:00 | Afternoon shift (≈8 hours) |
+| **3** | 23:01–06:59 | Night shift (≈8 hours) |
+
+### Usage Example
+
+```typescript
+import { fetchDashboardTurnos } from './services/supabaseService';
+import type { VwDashboardTurnos } from './types';
+
+// Fetch today's shift data
+const shifts: VwDashboardTurnos | null = await fetchDashboardTurnos();
+
+if (shifts) {
+  console.log(`Date: ${shifts.fecha}`);
+  console.log(`Shift 1: ${shifts.turno_1} trucks`);
+  console.log(`Shift 2: ${shifts.turno_2} trucks`);
+  console.log(`Shift 3: ${shifts.turno_3} trucks`);
+  
+  const total = shifts.turno_1 + shifts.turno_2 + shifts.turno_3;
+  console.log(`Total today: ${total} trucks`);
+}
+```
+
+### Current Shift Detection
+
+```typescript
+function getCurrentShift(): 1 | 2 | 3 {
+  const now = new Date();
+  const hours = now.getHours();
+  
+  if (hours >= 7 && hours < 15) return 1;
+  if (hours >= 15 && hours < 23) return 2;
+  return 3; // 23:00-06:59
+}
+
+function getCurrentShiftCount(data: VwDashboardTurnos): number {
+  const shift = getCurrentShift();
+  
+  switch (shift) {
+    case 1: return data.turno_1;
+    case 2: return data.turno_2;
+    case 3: return data.turno_3;
+  }
+}
+```
+
+### Display in Panel Component
+
+```typescript
+function PanelTurnos({ data }: { data: VwDashboardTurnos | null }) {
+  if (!data) {
+    return <div>No hay datos de turnos</div>;
+  }
+  
+  const currentShift = getCurrentShift();
+  const currentCount = getCurrentShiftCount(data);
+  
+  return (
+    <div className="panel">
+      <h3>Turno {currentShift}</h3>
+      <div className="count">{currentCount}</div>
+      <div className="label">unidades atendidas</div>
+      
+      <div className="shift-breakdown">
+        <div>T1: {data.turno_1}</div>
+        <div>T2: {data.turno_2}</div>
+        <div>T3: {data.turno_3}</div>
+      </div>
+    </div>
+  );
+}
+```
+
+## VwPromedioPatioNeto
+
+Average net yard time for finalized trucks (total time minus incident time).
+
+**Database View**: `vista_promedio_patio_neto`
+
+**Query Logic**: Calculates `AVG(tiempo_total_patio - tiempo_total_incidencias)` for trucks with `estado = 'Finalizado'`.
+
+<ResponseField name="promedio_neto_patio" type="string | null" required>
+  Average net yard time as PostgreSQL interval string, or `null` if no data available
+  
+  Format: `"HH:MM:SS"` or `"HH:MM:SS.mmm"`
+  
+  Example: `"01:45:30"` = 1 hour, 45 minutes, 30 seconds average
+</ResponseField>
+
+### Usage Example
+
+```typescript
+import { 
+  fetchPromedioPatioNeto, 
+  intervalAMinutos 
+} from './services/supabaseService';
+import type { VwPromedioPatioNeto } from './types';
+
+// Fetch average net yard time
+const avg: VwPromedioPatioNeto | null = await fetchPromedioPatioNeto();
+
+if (avg && avg.promedio_neto_patio) {
+  const minutes = intervalAMinutos(avg.promedio_neto_patio);
+  console.log(`Average net yard time: ${minutes.toFixed(1)} minutes`);
+  
+  const hours = Math.floor(minutes / 60);
+  const mins = Math.round(minutes % 60);
+  console.log(`Formatted: ${hours}h ${mins}m`);
+} else {
+  console.log('No data available yet');
+}
+```
+
+### Display in Panel Component
+
+```typescript
+import { intervalAMinutos } from './services/supabaseService';
+
+function PanelPromedioNeto({ data }: { data: VwPromedioPatioNeto | null }) {
+  if (!data || !data.promedio_neto_patio) {
+    return (
+      <div className="panel">
+        <h3>Tiempo Promedio Neto</h3>
+        <div className="no-data">Sin datos</div>
+      </div>
+    );
+  }
+  
+  const minutes = intervalAMinutos(data.promedio_neto_patio);
+  const hours = Math.floor(minutes / 60);
+  const mins = Math.round(minutes % 60);
+  
+  return (
+    <div className="panel">
+      <h3>Tiempo Promedio Neto en Patio</h3>
+      <div className="time-display">
+        <span className="hours">{hours}</span>h
+        <span className="minutes">{mins}</span>m
+      </div>
+      <div className="label">promedio (sin incidencias)</div>
+    </div>
+  );
+}
+```
+
+## Interval Helper Functions
+
+PostgreSQL intervals require parsing before display. The service layer provides utility functions:
+
+### intervalAMinutos
+
+Converts PostgreSQL interval to numeric minutes.
+
+```typescript
+export function intervalAMinutos(
+  interval: string | null | undefined
+): number
+```
+
+**Handles multiple formats**:
+- `"HH:MM:SS"` → Standard format
+- `"HH:MM:SS.mmm"` → With milliseconds
+- `"-HH:MM:SS"` → Negative intervals (night shift edge cases)
+- `"1 day 02:30:00"` → Multi-day intervals
+- `"HH:MM:SS+00"` → With timezone offset
+
+**Returns**: `0` for null/invalid inputs
+
+### intervalATexto
+
+Converts PostgreSQL interval to human-readable text.
+
+```typescript
+export function intervalATexto(
+  interval: string | null | undefined
+): string
+```
+
+**Returns**:
+- `"Xh Ym"` for times ≥ 1 hour (e.g., `"2h 15m"`)
+- `"Ym"` for times < 1 hour (e.g., `"45m"`)
+- `"< 1m"` for zero or negative values
+
+### Example Usage
+
+```typescript
+import { intervalAMinutos, intervalATexto } from './services/supabaseService';
+
+// Convert to minutes
+const min1 = intervalAMinutos('02:30:00');     // 150
+const min2 = intervalAMinutos('00:45:30');     // 45.5
+const min3 = intervalAMinutos('1 day 01:00:00'); // 1500
+
+// Convert to text
+const txt1 = intervalATexto('02:30:00');  // "2h 30m"
+const txt2 = intervalATexto('00:45:00');  // "45m"
+const txt3 = intervalATexto('00:00:30');  // "< 1m"
+const txt4 = intervalATexto(null);        // "< 1m"
+```
+
+## Realtime Updates
+
+All views automatically update through Supabase Realtime subscriptions. The frontend subscribes to `postgres_changes` events on the underlying tables:
+
+```typescript
+// Example subscription pattern
+supabase
+  .channel('dashboard-updates')
+  .on(
+    'postgres_changes',
+    { event: '*', schema: 'public', table: 'viajes_camiones' },
+    (payload) => {
+      // Refetch view data
+      fetchUnidadPrioridad();
+      fetchDashboardTurnos();
+      fetchPromedioPatioNeto();
+    }
+  )
+  .subscribe();
+```
+
+## Deprecated Aliases
+
+For backward compatibility, the following type aliases exist but should not be used in new code:
+
+```typescript
+/** @deprecated Use VwUnidadPrioridad */
+export type VwCamionMayorEspera = VwUnidadPrioridad;
+
+/** @deprecated Use VwDashboardTurnos */
+export type VwAtendidosPorTurno = VwDashboardTurnos;
+
+/** @deprecated Use VwPromedioPatioNeto */
+export type VwTiempoPromedioPatio = VwPromedioPatioNeto;
+```
+
+## Environment Configuration
+
+View names are configurable via environment variables:
+
+```bash
+# .env
+VITE_VIEW_PRIORIDAD=vista_unidad_prioridad
+VITE_VIEW_TURNOS=vista_dashboard_turnos
+VITE_VIEW_PROMEDIO=vista_promedio_patio_neto
+```
+
+The service layer reads these at runtime:
+
+```typescript
+const V_PRIORIDAD = import.meta.env.VITE_VIEW_PRIORIDAD ?? 'vista_unidad_prioridad';
+const V_TURNOS    = import.meta.env.VITE_VIEW_TURNOS    ?? 'vista_dashboard_turnos';
+const V_PROMEDIO  = import.meta.env.VITE_VIEW_PROMEDIO  ?? 'vista_promedio_patio_neto';
+```
+
+## Related Types
+
+- [Camion](/api/types/camion) - Main truck entity that feeds these views
+- [ConfigSimulador](/api/types/bahia-config#configsimulador) - Alert thresholds used in priority calculations
+
+## Source
+
+Defined in `src/types.ts:48-81`
+
+Service functions in `src/services/supabaseService.ts:127-224`

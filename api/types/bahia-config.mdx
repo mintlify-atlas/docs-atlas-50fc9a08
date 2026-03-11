@@ -1,0 +1,330 @@
+---
+title: 'Bay Configuration'
+description: 'Bay configuration interfaces and simulator settings'
+icon: 'warehouse'
+---
+
+## Overview
+
+These interfaces define the configuration for loading/unloading bays and simulator behavior. Each bay has specific truck type restrictions, allowed operations, and positioning data for the visual layout.
+
+## BahiaConfig Interface
+
+Defines the configuration for a single bay (loading/unloading station).
+
+<ResponseField name="nombre" type="string" required>
+  Bay display name (e.g., "Bahía 1", "Bahía 10")
+</ResponseField>
+
+<ResponseField name="camionesPermitidos" type="TipoCamion[]" required>
+  Array of truck type codes allowed in this bay. Each code is one of: `P`, `J`, `B`, `T`, `O`
+  
+  Example: `['P','J','B','O']` allows all types except Tolva trucks
+</ResponseField>
+
+<ResponseField name="tareas" type="{ D: string[]; C: string[] }" required>
+  Operation-specific tasks allowed in this bay:
+  - **D** (Descarga): Array of unloadable products (e.g., `['Fardos', 'PT', 'MIXD']`)
+  - **C** (Carga): Array of loadable products (e.g., `['PP', 'PT', 'MIXC']`)
+  
+  Empty arrays mean the operation is not supported in this bay
+</ResponseField>
+
+<ResponseField name="alerta" type="string">
+  Optional warning message displayed to operators when truck is assigned to this bay
+  
+  Example: `"¡ATENCIÓN! Coordina con T2."`
+</ResponseField>
+
+<ResponseField name="posX" type="number" required>
+  Horizontal position as percentage of reference layout width (1061px)
+  
+  Example: `2.92` represents 2.92% from left edge
+</ResponseField>
+
+<ResponseField name="posY" type="number" required>
+  Vertical position as percentage of reference layout height (580px)
+  
+  Example: `31.38` represents 31.38% from top edge
+</ResponseField>
+
+## ConfigSimulador Interface
+
+Defines global simulator configuration and alert thresholds.
+
+<ResponseField name="modo" type="'simulacion' | 'real'" required>
+  Operating mode:
+  - **simulacion**: Uses mock data for testing
+  - **real**: Connects to live Supabase database
+</ResponseField>
+
+<ResponseField name="tiempoAmarillo" type="number" required>
+  Time threshold in minutes to trigger yellow (warning) alert state
+  
+  Typical value: `30` minutes
+</ResponseField>
+
+<ResponseField name="tiempoRojo" type="number" required>
+  Time threshold in minutes to trigger red (critical) alert state
+  
+  Typical value: `45` minutes
+</ResponseField>
+
+<ResponseField name="rol" type="Rol" required>
+  User role: `'admin'` | `'cliente'`
+  
+  - **admin**: Full access to modify configurations and register incidents
+  - **cliente**: Read-only dashboard access
+</ResponseField>
+
+## Bay Configuration Example
+
+Real configuration from `bahiasConfig.ts`:
+
+```typescript
+import type { BahiaConfig } from '../types';
+
+export const BAHIAS_CONFIG: Record<string, BahiaConfig> = {
+  // General purpose bays - accept all truck types, descarga only
+  'b0.1': {
+    nombre: 'Bahía 0.1',
+    camionesPermitidos: ['P','J','B','T','O'],
+    tareas: {
+      D: ['Fardos','Envases','CPC','PH','MIXD'],
+      C: []
+    },
+    posX: 2.92,
+    posY: 31.38
+  },
+  
+  // Specialized bay - Parihueleros only, both operations, requires coordination
+  'b10': {
+    nombre: 'Bahía 10',
+    camionesPermitidos: ['P'],
+    tareas: {
+      D: ['PT','PP','MIXD'],
+      C: ['PP','PT','MIXC']
+    },
+    alerta: '¡ATENCIÓN! Coordina con T2.',
+    posX: 76.81,
+    posY: 33.62
+  },
+  
+  // Multi-purpose bay - no Tolvas, supports both operations
+  'b3': {
+    nombre: 'Bahía 3',
+    camionesPermitidos: ['P','J','B','O'],
+    tareas: {
+      D: ['PT','MIXD'],
+      C: ['PP','PT','MIXC']
+    },
+    posX: 24.03,
+    posY: 5.69
+  },
+};
+```
+
+## Usage Examples
+
+### Checking Bay Compatibility
+
+```typescript
+import { BAHIAS_CONFIG } from './Componentes/bahiasConfig';
+import type { Camion, BahiaConfig } from './types';
+
+function canAssignTruckToBay(
+  truck: Camion, 
+  bayId: string
+): { compatible: boolean; reason?: string } {
+  const bay: BahiaConfig = BAHIAS_CONFIG[bayId];
+  
+  if (!bay) {
+    return { compatible: false, reason: 'Bay not found' };
+  }
+  
+  // Check truck type
+  if (!bay.camionesPermitidos.includes(truck.tipoCodigo)) {
+    return { 
+      compatible: false, 
+      reason: `Bay does not accept ${truck.tipoCodigo} trucks` 
+    };
+  }
+  
+  // Check operation type
+  const allowedTasks = bay.tareas[truck.operacionCodigo];
+  if (allowedTasks.length === 0) {
+    return { 
+      compatible: false, 
+      reason: `Bay does not support ${truck.operacionCodigo} operations` 
+    };
+  }
+  
+  // Check specific product
+  if (!allowedTasks.includes(truck.producto)) {
+    return { 
+      compatible: false, 
+      reason: `Bay cannot handle product: ${truck.producto}` 
+    };
+  }
+  
+  return { compatible: true };
+}
+```
+
+### Finding Available Bays
+
+```typescript
+import { BAHIAS_CONFIG } from './Componentes/bahiasConfig';
+import type { Camion } from './types';
+
+function findCompatibleBays(truck: Camion): string[] {
+  return Object.keys(BAHIAS_CONFIG).filter(bayId => {
+    const bay = BAHIAS_CONFIG[bayId];
+    
+    // Must accept truck type
+    if (!bay.camionesPermitidos.includes(truck.tipoCodigo)) {
+      return false;
+    }
+    
+    // Must support operation type with available tasks
+    const tasks = bay.tareas[truck.operacionCodigo];
+    return tasks.length > 0;
+  });
+}
+
+// Example usage
+const truck: Camion = {
+  tipoCodigo: 'P',
+  operacionCodigo: 'C',
+  producto: 'PP',
+  // ... other fields
+};
+
+const availableBays = findCompatibleBays(truck);
+console.log(`Truck can use bays: ${availableBays.join(', ')}`);
+```
+
+### Alert Time Calculation
+
+```typescript
+import type { ConfigSimulador, EstadoAlerta } from './types';
+
+function calculateAlertState(
+  waitTimeMinutes: number,
+  config: ConfigSimulador
+): EstadoAlerta {
+  if (waitTimeMinutes >= config.tiempoRojo) {
+    return 'rojo';
+  }
+  if (waitTimeMinutes >= config.tiempoAmarillo) {
+    return 'amarillo';
+  }
+  return 'verde';
+}
+
+// Example
+const config: ConfigSimulador = {
+  modo: 'real',
+  tiempoAmarillo: 30,
+  tiempoRojo: 45,
+  rol: 'admin'
+};
+
+const alert1 = calculateAlertState(25, config); // 'verde'
+const alert2 = calculateAlertState(35, config); // 'amarillo'
+const alert3 = calculateAlertState(50, config); // 'rojo'
+```
+
+### Rendering Bay Position
+
+```typescript
+import { BAHIAS_CONFIG } from './Componentes/bahiasConfig';
+import type { BahiaConfig } from './types';
+
+function renderBayOverlay(bayId: string) {
+  const bay: BahiaConfig = BAHIAS_CONFIG[bayId];
+  
+  return (
+    <div
+      style={{
+        position: 'absolute',
+        left: `${bay.posX}%`,
+        top: `${bay.posY}%`,
+        transform: 'translate(-50%, -50%)'
+      }}
+    >
+      <h3>{bay.nombre}</h3>
+      {bay.alerta && (
+        <div className="alert-warning">
+          {bay.alerta}
+        </div>
+      )}
+    </div>
+  );
+}
+```
+
+### Product Filtering
+
+```typescript
+import { BAHIAS_CONFIG } from './Componentes/bahiasConfig';
+import type { OperacionCodigo } from './types';
+
+function getAllowedProducts(
+  bayId: string, 
+  operation: OperacionCodigo
+): string[] {
+  const bay = BAHIAS_CONFIG[bayId];
+  return bay ? bay.tareas[operation] : [];
+}
+
+// Get all products that can be unloaded in bay 1
+const unloadProducts = getAllowedProducts('b1', 'D');
+// ['Fardos', 'Envases', 'CPC', 'PH', 'MIXD']
+
+// Get all products that can be loaded in bay 3
+const loadProducts = getAllowedProducts('b3', 'C');
+// ['PP', 'PT', 'MIXC']
+```
+
+## Product Codes
+
+Common product codes used in `tareas` configuration:
+
+| Code | Description |
+|------|-------------|
+| `Fardos` | Baled products |
+| `Envases` | Containers/packaging |
+| `CPC` | CPC products |
+| `PH` | PH products |
+| `PP` | Polypropylene |
+| `PT` | Polyethylene terephthalate |
+| `MIXD` | Mixed descarga (unloading) |
+| `MIXC` | Mixed carga (loading) |
+| `ENVLT` | Light containers |
+
+## Bay Types
+
+Bays are categorized by their restrictions:
+
+### Universal Bays
+Accept all truck types (`['P','J','B','T','O']`): b0.1, b0.2, b1, b2
+
+### Restricted Bays
+No Tolvas (`['P','J','B','O']`): b3, b4, b5, b14
+
+### Specialized Bays
+Parihueleros only (`['P']`): b10, b12
+
+## Related Types
+
+- [Camion](/api/types/camion) - Truck interface using these bay configurations
+- [TipoCamion](/api/types/camion#tipocamion-type) - Truck type codes used in `camionesPermitidos`
+- [OperacionCodigo](/api/types/camion#operacioncodigo-type) - Operation codes used in `tareas`
+- [EstadoAlerta](/api/types/camion#estadoalerta-type) - Alert states calculated from `ConfigSimulador` thresholds
+
+## Source
+
+Defined in `src/types.ts:32-46`
+
+Configuration data in `src/Componentes/bahiasConfig.ts:11-22`

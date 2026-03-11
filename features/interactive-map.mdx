@@ -1,0 +1,221 @@
+---
+title: Interactive Map
+description: Satellite-based patio map with real-time bay visualization and truck positioning
+icon: map
+---
+
+## Overview
+
+The Dashboard Backus interactive map provides a satellite view of the patio facility with overlay interfaces for all operational bays. The map serves as the primary workspace where operators manage truck assignments and monitor loading/unloading operations in real-time.
+
+## Map Architecture
+
+The map system is built with the following components:
+
+```typescript
+// SimuladorMapa.tsx
+<main id="mapa-area" className="flex-1 w-full relative overflow-hidden">
+  <div className="absolute inset-0" style={{
+    backgroundImage: 'url(/patio.png)',
+    backgroundSize: '100% 100%',
+    backgroundPosition: 'center',
+    backgroundRepeat: 'no-repeat',
+    filter: imgFilter,
+    transition: 'filter 0.6s ease',
+    zIndex: 0,
+  }} />
+  
+  {/* Bay overlays positioned absolutely */}
+  {Object.entries(BAHIAS_CONFIG).map(([id, bay]) => (
+    <div key={id} style={{ left: `${bay.posX}%`, top: `${bay.posY}%` }}>
+      <BahiaOverlay
+        bahiaId={id}
+        config={bay}
+        camion={enProceso[id] || null}
+        // ... more props
+      />
+    </div>
+  ))}
+</main>
+```
+
+## Map Features
+
+### Satellite Background
+
+The map uses a high-resolution satellite image (`patio.png`) of the actual facility, providing operators with a familiar view that matches the physical layout.
+
+**Image Filters:**
+- **Dark Mode**: `brightness(0.60) saturate(0.9)` — reduces brightness for night shifts
+- **Light Mode**: `brightness(0.85) saturate(1.1)` — enhances visibility for day shifts
+- **Help Mode**: Slightly increases brightness to highlight interactive areas
+
+```typescript
+const imgBase = darkMode 
+  ? 'brightness(0.60) saturate(0.9)' 
+  : 'brightness(0.85) saturate(1.1)';
+
+const imgFilter = modoAyuda
+  ? (darkMode ? 'brightness(0.80) saturate(1.1)' : 'brightness(0.95) saturate(1.15)')
+  : imgBase;
+```
+
+### Bay Positioning
+
+Each bay is positioned using percentage-based coordinates that map to the satellite image. This ensures accurate placement regardless of screen size.
+
+```typescript
+// bahiasConfig.ts - Example bay configurations
+export const BAHIAS_CONFIG: Record<string, BahiaConfig> = {
+  'b0.1': { 
+    nombre: 'Bahía 0.1',
+    posX: 2.92,   // 2.92% from left edge
+    posY: 31.38,  // 31.38% from top edge
+    camionesPermitidos: ['P','J','B','T','O'],
+    tareas: { D: ['Fardos','Envases','CPC','PH','MIXD'], C: [] }
+  },
+  'b3': {
+    nombre: 'Bahía 3',
+    posX: 24.03,
+    posY: 5.69,
+    camionesPermitidos: ['P','J','B','O'],
+    tareas: { D: ['PT','MIXD'], C: ['PP','PT','MIXC'] }
+  },
+  // ... 8 more bays
+};
+```
+
+<Note>
+The coordinate system is based on a 1061×580px reference frame. Positions are calculated as percentages to maintain accuracy across different screen resolutions.
+</Note>
+
+## Dark/Light Mode Toggle
+
+The map adapts to operator preference with seamless dark/light mode transitions:
+
+```typescript
+const [darkMode, setDarkMode] = useState(true);
+
+// Apply theme to entire map container
+<div className={`h-screen w-full flex flex-col overflow-hidden 
+  ${darkMode ? 'bg-[#060d1a]' : 'bg-[#e8edf5]'}`}>
+```
+
+**Benefits:**
+- **Dark Mode**: Reduces eye strain during night shifts (23:01–06:59)
+- **Light Mode**: Improves visibility in well-lit control rooms
+- **Smooth Transitions**: 0.6s CSS transitions prevent jarring changes
+
+## Help Mode
+
+Help mode provides visual guidance by highlighting compatible bays when dragging a truck:
+
+```typescript
+// BahiaOverlay.tsx - Help mode highlighting
+if (modoAyuda && camionArrastrando && !ocupada && simulacionActiva) {
+  const res = validarFn(camionArrastrando, bahiaId);
+  dropColor   = res === true ? 'rgba(22,163,74,0.30)'  : 'rgba(220,38,38,0.22)';
+  borderColor = res === true ? '#22c55e'               : '#ef4444';
+}
+```
+
+<Steps>
+  <Step title="Activate Help Mode">
+    Click the help icon in the header toolbar
+  </Step>
+  <Step title="Select a Truck">
+    Start dragging any truck from the queue
+  </Step>
+  <Step title="See Compatible Bays">
+    Compatible bays glow **green**, incompatible bays glow **red**
+  </Step>
+  <Step title="Drop on Valid Bay">
+    Only green-highlighted bays accept the drop
+  </Step>
+</Steps>
+
+## Responsive Design
+
+The map uses `clamp()` CSS functions to scale proportionally across screen sizes:
+
+```css
+width: clamp(110px, 9vw, 148px)  /* Bay overlay width */
+font-size: clamp(0.62rem, 0.78vw, 0.76rem)  /* Bay name */
+padding: clamp(8px, 1vh, 14px)  /* Panel padding */
+```
+
+## Real-Time Data Updates
+
+The map polls Supabase every 10 seconds to fetch trucks in queue:
+
+```typescript
+useEffect(() => {
+  if (!simulacionActiva) return;
+
+  const cargarCola = async () => {
+    const camiones = await fetchCamionesCola();
+    const idsEnBahia = new Set(Object.values(enProcesoRef.current).map(c => c.id));
+    setCola(camiones.filter(c => !idsEnBahia.has(c.id)));
+  };
+
+  cargarCola();
+  const poller = setInterval(cargarCola, 10_000);
+  return () => clearInterval(poller);
+}, [simulacionActiva]);
+```
+
+<Warning>
+The polling filter prevents trucks already assigned to bays from reappearing in the queue, avoiding duplicate assignments.
+</Warning>
+
+## Toast Notifications
+
+The map displays contextual notifications for all operations:
+
+```typescript
+const notify = useCallback((msg: string, tipo = 'info') => {
+  const id = Date.now() + Math.random();
+  setToasts(p => [...p, { id, msg, tipo }]);
+  setTimeout(() => setToasts(p => p.filter(t => t.id !== id)), 4000);
+}, []);
+
+// Usage examples:
+notify('🚀 Sesión iniciada', 'success');
+notify('❌ Error al registrar salida', 'error');
+notify(`🔄 ${camion.placa} → ${bahia}`, 'info');
+```
+
+**Toast Types:**
+- **Success** (green): Truck assignments, incident closures, successful exits
+- **Error** (red): Validation failures, database errors, incompatible assignments
+- **Info** (gray): Bay transfers, configuration changes, general updates
+
+## Screenshot Reference
+
+<Card title="Map View Example" icon="image">
+  The interactive map shows:
+  - Satellite imagery of the patio facility
+  - 10 bay overlays positioned at real-world coordinates
+  - Truck queue at the bottom with 5-column grid layout
+  - 3 floating panels with real-time statistics
+  - Traffic light legend in bottom-right corner
+  - Toast notifications in bottom-left corner
+</Card>
+
+## Performance Considerations
+
+- **Image Optimization**: Use WebP format for the satellite image to reduce load time
+- **Polling Throttle**: 10-second intervals balance freshness with server load
+- **CSS Transitions**: Hardware-accelerated transforms prevent UI jank
+- **Memoization**: React callbacks wrapped in `useCallback` to prevent re-renders
+
+## Related Features
+
+<CardGroup cols={2}>
+  <Card title="Drag and Drop" icon="hand" href="./drag-and-drop">
+    Learn how to assign trucks to bays using drag-and-drop
+  </Card>
+  <Card title="Dashboard Panels" icon="chart-line" href="./dashboard-panels">
+    Explore the real-time statistics overlays
+  </Card>
+</CardGroup>

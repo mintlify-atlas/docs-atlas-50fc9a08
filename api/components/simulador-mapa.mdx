@@ -1,0 +1,368 @@
+---
+title: "SimuladorMapa"
+description: "Main container component for the truck yard simulation with real-time tracking, drag-and-drop bay assignments, and dashboard panels"
+---
+
+## Overview
+
+`SimuladorMapa` is the primary orchestrator component for the Dashboard Backus truck yard simulation system. It manages the complete lifecycle of truck operations including queue management, bay assignments, real-time status tracking, and incident reporting.
+
+**Key Features:**
+- Real-time truck queue polling (10-second intervals)
+- Drag-and-drop bay assignment with validation
+- Traffic light alert system (green/yellow/red based on wait time)
+- Dashboard panels with 15-second polling
+- Incident tracking and reporting
+- Dual mode support: simulation (seconds) and real (minutes)
+- Role-based access control (admin/client)
+
+## Component Props
+
+<ParamField path="rolInicial" type="Rol" required>
+  User role that determines access level and feature availability. Type: `'admin' | 'cliente'`
+  
+  - **admin**: Full access to configuration, manual operations, and time settings
+  - **cliente**: View-only mode with fixed alert thresholds (60min yellow, 120min red)
+</ParamField>
+
+<ParamField path="nombreUsuario" type="string" required>
+  Display name of the current user, shown in the header component
+</ParamField>
+
+<ParamField path="onLogout" type="() => void" required>
+  Callback function invoked when the user confirms session logout
+</ParamField>
+
+## State Management
+
+The component maintains several key state objects:
+
+### Configuration State
+
+```typescript
+interface ConfigSimulador {
+  modo: 'simulacion' | 'real';  // Time scale mode
+  rol: Rol;                      // User role
+  tiempoAmarillo: number;        // Yellow alert threshold
+  tiempoRojo: number;            // Red alert threshold
+}
+```
+
+### Statistics State
+
+```typescript
+interface StatsSimulador {
+  atendidosTurno1: number;      // Trucks served in shift 1 (7:00-15:00)
+  atendidosTurno2: number;      // Trucks served in shift 2 (15:01-23:00)
+  atendidosTurno3: number;      // Trucks served in shift 3 (23:01-06:59)
+  total: number;                // Total trucks processed
+  tiemposTotalPatio: number[];  // Array of yard time durations (minutes)
+}
+```
+
+### Truck Queue State
+
+```typescript
+const [cola, setCola] = useState<Camion[]>([])
+```
+
+Manages trucks waiting in the queue. Automatically filtered to exclude trucks already assigned to bays.
+
+### Bay Occupancy State
+
+```typescript
+const [enProceso, setEnProceso] = useState<Record<string, Camion>>({})
+```
+
+Tracks which truck is currently assigned to each bay, keyed by bay ID.
+
+## Core Functions
+
+### validarAsignacion
+
+```typescript
+const validarAsignacion = (
+  camion: Camion, 
+  bahiaId: string
+): true | string
+```
+
+Validates whether a truck can be assigned to a specific bay.
+
+**Validation Rules:**
+1. Bay must not be occupied
+2. Truck type must be in bay's `camionesPermitidos` list
+3. Operation type (C/D) must be supported by bay
+4. Product must match bay's product list or be MIXD/MIXC
+
+**Returns:**
+- `true` if assignment is valid
+- Error message string if validation fails
+
+**Example:**
+```typescript
+const resultado = validarAsignacion(camion, 'bahia-1');
+if (resultado !== true) {
+  notify(resultado, 'error');
+  return;
+}
+```
+
+### handleDrop
+
+```typescript
+const handleDrop = useCallback((bahiaId: string) => void, [
+  camionArrastrando,
+  config.modo,
+  notify
+])
+```
+
+Handles truck drop events onto bays.
+
+**Workflow:**
+1. Validates assignment using `validarAsignacion`
+2. Shows confirmation alert if bay has special warnings
+3. Removes truck from queue
+4. Updates statistics for current shift
+5. Adds truck to bay's `enProceso` state
+6. Calls `handleDropBahiaReal` to update Supabase
+7. In simulation mode, auto-completes after 8 time units
+
+**Database Integration:**
+```typescript
+await actualizarBahiaDirecto(camion.id_viaje, bay.nombre, 'Descargando')
+```
+
+### handleDropFromBahia
+
+```typescript
+const handleDropFromBahia = (
+  fromBahiaId: string, 
+  toBahiaId: string
+) => void
+```
+
+Moves a truck from one bay to another via drag-and-drop.
+
+**Validation:**
+- Checks destination bay compatibility
+- Ensures destination bay is not occupied
+
+### handleFinalizar
+
+```typescript
+const handleFinalizar = useCallback(async (
+  bahiaId: string, 
+  camion: Camion
+) => Promise<void>, [notify])
+```
+
+Manually marks a truck's departure from the yard.
+
+**Process:**
+1. Prevents duplicate submissions with `bahiasSaliendo` ref
+2. Calculates total yard time in minutes
+3. Updates shift statistics
+4. Removes truck from `enProceso`
+5. Calls `marcarSalidaDirecto` to update Supabase
+6. Shows success/error notification
+
+**Usage:** Called by `BahiaOverlay` when user clicks "Salida" button
+
+### handleIncidenciaRegistrada
+
+```typescript
+const handleIncidenciaRegistrada = useCallback(
+  (camionId: string) => void, 
+  []
+)
+```
+
+Increments the incident counter for a specific truck.
+
+**Alert Logic:**
+- Shows modal when truck reaches 3 incidents
+- Updates both queue and bay state
+- Prevents additional incident registration at limit
+
+## Polling Mechanisms
+
+### Queue Polling (10s)
+
+```typescript
+useEffect(() => {
+  if (!simulacionActiva) return;
+  
+  const cargarCola = async () => {
+    const camiones = await fetchCamionesCola();
+    const idsEnBahia = new Set(Object.values(enProcesoRef.current).map(c => c.id));
+    setCola(camiones.filter(c => !idsEnBahia.has(c.id)));
+  };
+  
+  cargarCola();
+  const poller = setInterval(cargarCola, 10_000);
+  return () => clearInterval(poller);
+}, [simulacionActiva]);
+```
+
+Fetches trucks from `vw_camiones_cola` view and filters out trucks already in bays.
+
+### Dashboard Panels Polling (15s)
+
+```typescript
+const recargarPaneles = useCallback(async () => {
+  const [prioridad, turnos, promedio] = await Promise.all([
+    fetchUnidadPrioridad(),
+    fetchDashboardTurnos(),
+    fetchPromedioPatioNeto(),
+  ]);
+  // Updates panel states...
+}, []);
+```
+
+Refreshes three dashboard panels:
+- **Priority Unit**: Truck with longest wait time
+- **Shift Count**: Trucks processed per shift
+- **Average Time**: Net yard time (incidents deducted)
+
+### Traffic Light Timer (1s)
+
+```typescript
+useEffect(() => {
+  if (!simulacionActiva) return;
+  const factor = config.modo === 'real' ? 60_000 : 1_000;
+  
+  const interval = setInterval(() => {
+    setCola(prev => prev.map(c => {
+      const unidad = (Date.now() - c.tiempoLlegadaCola) / factor;
+      const estado: EstadoAlerta =
+        unidad >= config.tiempoRojo ? 'rojo' :
+        unidad >= config.tiempoAmarillo ? 'amarillo' : 'verde';
+      // Updates max alert reached...
+      return { ...c, estadoAlerta: estado, maxAlertaReached: maxAlerta };
+    }));
+  }, 1_000);
+  
+  return () => clearInterval(interval);
+}, [simulacionActiva, config.modo, config.tiempoAmarillo, config.tiempoRojo]);
+```
+
+## Drag-and-Drop Implementation
+
+### From Queue to Bay
+
+1. **TarjetaCamion** sets `truckId` in `dataTransfer` and calls `onDragStart`
+2. **SimuladorMapa** stores dragging truck in state
+3. **BahiaOverlay** handles `onDrop`, validates, and calls `handleDrop`
+4. **SimuladorMapa** processes assignment and updates database
+
+### From Bay to Bay
+
+1. **BahiaOverlay** (occupied) sets `fromBahia` in `dataTransfer`
+2. **BahiaOverlay** (target) receives drop and calls `onDropFromBahia`
+3. **SimuladorMapa** moves truck between bays and updates database
+
+## Notification System
+
+```typescript
+const notify = useCallback((msg: string, tipo = 'info') => {
+  const id = Date.now() + Math.random();
+  setToasts(p => [...p, { id, msg, tipo }]);
+  setTimeout(() => setToasts(p => p.filter(t => t.id !== id)), 4000);
+}, []);
+```
+
+**Toast Types:**
+- `info`: General notifications (blue/gray)
+- `success`: Successful operations (green)
+- `error`: Validation errors and failures (red)
+
+**Auto-dismiss:** 4 seconds
+
+## Time Management
+
+### Simulation Mode
+- 1 second = 1 time unit
+- Default thresholds: 60s yellow, 120s red
+- Auto-completion: 8 seconds
+
+### Real Mode
+- 1 minute = 1 time unit  
+- Default thresholds: 60min yellow, 120min red
+- Manual completion only
+
+### Client Role Override
+
+```typescript
+const TIEMPOS_CLIENTE = { tiempoAmarillo: 60, tiempoRojo: 120 } as const;
+
+// Configuration is locked for clients
+if (rolInicial === 'cliente') {
+  configFinal = { ...c, rol: 'cliente', ...TIEMPOS_CLIENTE };
+}
+```
+
+## Shift Detection
+
+```typescript
+const getTurnoActual = (): 1 | 2 | 3 => {
+  const h = new Date().getHours();
+  if (h >= 7  && h < 15) return 1;  // 07:00-14:59
+  if (h >= 15 && h < 23) return 2;  // 15:00-22:59
+  return 3;                         // 23:00-06:59
+};
+```
+
+Automatic shift assignment based on system time.
+
+## Dark Mode Support
+
+The component fully supports dark/light theme switching:
+
+```typescript
+const [darkMode, setDarkMode] = useState(true);
+
+// Dynamic theme classes
+const dm = darkMode;
+className={`h-screen w-full flex flex-col overflow-hidden 
+  ${dm ? 'bg-[#060d1a]' : 'bg-[#e8edf5]'}`}
+```
+
+## Help Mode
+
+```typescript
+const [modoAyuda, setModoAyuda] = useState(false);
+```
+
+When enabled:
+- Brightens the background map image
+- Reduces overlay veil opacity
+- BahiaOverlay highlights compatible bays in green/red
+
+## Usage Example
+
+```tsx
+import SimuladorMapa from './Componentes/SimuladorMapa';
+
+function App() {
+  const [user, setUser] = useState(null);
+  
+  if (!user) return <LoginScreen onLogin={setUser} />;
+  
+  return (
+    <SimuladorMapa
+      rolInicial={user.rol}
+      nombreUsuario={user.nombre}
+      onLogout={() => setUser(null)}
+    />
+  );
+}
+```
+
+## References
+
+- **Source**: `src/Componentes/SimuladorMapa.tsx:54-561`
+- **Child Components**: [`BahiaOverlay`](/api/components/bahia-overlay), [`TarjetaCamion`](/api/components/tarjeta-camion), [`PanelFlotante`](/api/components/panel-flotante)
+- **Services**: `supabaseService.ts` - Database operations
+- **Configuration**: `bahiasConfig.ts` - Bay layout and rules

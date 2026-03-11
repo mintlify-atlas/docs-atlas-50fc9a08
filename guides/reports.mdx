@@ -1,0 +1,500 @@
+---
+title: Reports
+description: Generate session reports and analyze operational performance data
+---
+
+## Overview
+
+Dashboard Backus provides real-time session reports that aggregate operational metrics from the Supabase database. Reports help operators, supervisors, and management analyze performance trends and identify improvement opportunities.
+
+## Accessing Reports
+
+Reports can be accessed in two ways:
+
+### During Active Session
+
+<Steps>
+  <Step title="Click 'Detener' in Header">
+    While a session is running, click the "Detener" (Stop) button in the header bar.
+  </Step>
+  
+  <Step title="Report Modal Opens Automatically">
+    The session stops and the Report Modal displays automatically with final statistics.
+  </Step>
+</Steps>
+
+### Manual Report Access
+
+<Steps>
+  <Step title="Click Report Icon in Header">
+    Click the 📊 report icon in the header bar at any time (session active or inactive).
+  </Step>
+  
+  <Step title="View Current Data">
+    The Report Modal opens with the latest data from the database.
+  </Step>
+</Steps>
+
+<Info>
+  Reports always fetch **fresh data** from Supabase when opened, regardless of how they're accessed.
+</Info>
+
+## Report Structure
+
+The Report Modal displays five key metrics in a card-based layout:
+
+### 1. Total Trucks Processed (Session)
+
+**Metric**: Count of trucks assigned to bays during the current session
+
+**Icon**: 🚛
+
+**Color**: Sky blue (#38bdf8)
+
+**Data Source**: Local session state (`stats.total`)
+
+**Calculation**: Incremented each time:
+- A truck is dragged from queue to bay (admin assigns)
+- A truck auto-completes in simulation mode
+- A truck is manually finalized with "✅ Salida" button
+
+<Note>
+  This metric counts **session activity** only, not total daily throughput. It resets when a new session starts.
+</Note>
+
+### 2. Net Average Yard Time
+
+**Metric**: Mean time trucks spend in the yard, excluding incident downtime
+
+**Icon**: ⏱
+
+**Color**: Purple (#a78bfa)
+
+**Display Format**: "45.3 min" or "—" if no data
+
+**Data Source**: Supabase view `vista_promedio_patio_neto`
+
+**Calculation**:
+```sql
+SELECT AVG(
+  (hora_salida - hora_llegada) - COALESCE(SUM(duracion_calculada), '00:00:00')
+) AS promedio_neto_patio
+FROM viajes_camiones
+LEFT JOIN incidencias ON viajes_camiones.id = incidencias.id_camion
+WHERE estado = 'Finalizado'
+  AND fecha = CURRENT_DATE
+GROUP BY viajes_camiones.id;
+```
+
+**Interpretation**:
+- **< 45 min**: Excellent operational efficiency
+- **45-60 min**: Normal performance
+- **60-90 min**: Below target, investigate bottlenecks
+- **> 90 min**: Critical performance issue
+
+<Check>
+  This metric automatically excludes incident time, providing accurate operational performance data.
+</Check>
+
+### 3. Shift 1 Count (T1: 07:00-15:00)
+
+**Metric**: Number of trucks finalized during Shift 1 (morning shift)
+
+**Icon**: 🌅
+
+**Color**: Green (#4ade80)
+
+**Data Source**: 
+- **Primary**: Supabase view `vista_dashboard_turnos` (field: `turno_1`)
+- **Fallback**: Local session state (`stats.atendidosTurno1`) if view returns null
+
+**Shift Definition** (from `SimuladorMapa.tsx:35`):
+```typescript
+if (h >= 7 && h < 15) return 1;  // 07:00:00 - 14:59:59
+```
+
+**Typical Targets**:
+- **Peak days**: 30-40 trucks
+- **Normal days**: 25-35 trucks
+- **Low volume**: 15-25 trucks
+
+### 4. Shift 2 Count (T2: 15:01-23:00)
+
+**Metric**: Number of trucks finalized during Shift 2 (afternoon/evening shift)
+
+**Icon**: 🌤
+
+**Color**: Amber (#fbbf24)
+
+**Data Source**: 
+- **Primary**: Supabase view `vista_dashboard_turnos` (field: `turno_2`)
+- **Fallback**: Local session state (`stats.atendidosTurno2`) if view returns null
+
+**Shift Definition** (from `SimuladorMapa.tsx:36`):
+```typescript
+if (h >= 15 && h < 23) return 2;  // 15:00:00 - 22:59:59
+```
+
+<Note>
+  The shift boundary at 15:00 means a truck finalized at 14:59:59 counts toward T1, while 15:00:00 counts toward T2.
+</Note>
+
+### 5. Shift 3 Count (T3: 23:01-06:59)
+
+**Metric**: Number of trucks finalized during Shift 3 (night shift)
+
+**Icon**: 🌙
+
+**Color**: Red (#f87171)
+
+**Data Source**: 
+- **Primary**: Supabase view `vista_dashboard_turnos` (field: `turno_3`)
+- **Fallback**: Local session state (`stats.atendidosTurno3`) if view returns null
+
+**Shift Definition** (from `SimuladorMapa.tsx:37`):
+```typescript
+return 3;  // 23:00:00 - 06:59:59 (wraps midnight)
+```
+
+**Night Shift Characteristics**:
+- Typically lower volume than T1/T2
+- May have specialized product types
+- Cross-shift operations (started in T2, finished in T3)
+
+<Warning>
+  Night shift spans midnight, so the date changes mid-shift. Trucks finalized after 00:00 are counted toward the **new date** in the database.
+</Warning>
+
+## Report Data Refresh
+
+When the Report Modal opens, it automatically:
+
+<Steps>
+  <Step title="Fetch Latest Database Data">
+    Calls `fetchPromedioPatioNeto()` and `fetchDashboardTurnos()` from Supabase
+  </Step>
+  
+  <Step title="Update Modal Display">
+    Replaces local session state with fresh database values for:
+    - Net average yard time
+    - Shift counts (T1, T2, T3)
+  </Step>
+  
+  <Step title="Show Loading Indicator">
+    Displays "Actualizando…" text while fetching (typically < 1 second)
+  </Step>
+</Steps>
+
+**Refresh Logic** (from `ModalReporte.tsx:24-35`):
+```typescript
+useEffect(() => {
+  if (!show) return;
+  startTransition(() => setCargando(true));
+  Promise.all([fetchPromedioPatioNeto(), fetchDashboardTurnos()])
+    .then(([p, t]) => {
+      startTransition(() => {
+        if (p) setPromedio(p);
+        if (t) setTurnos(t);
+      });
+    })
+    .finally(() => startTransition(() => setCargando(false)));
+}, [show]);
+```
+
+<Info>
+  The report always shows **database truth**, not cached session data. This ensures accuracy when multiple operators are using the system.
+</Info>
+
+## Interpreting Report Data
+
+### Performance Analysis
+
+#### High Throughput, High Average Time
+
+```
+Total Trucks: 45
+Average Time: 75 min
+T1: 20 | T2: 18 | T3: 7
+```
+
+**Analysis**: 
+- Good volume but inefficient processing
+- Likely causes: incidents, bay utilization imbalance, complex products
+
+**Action Items**:
+- Review incident frequency and duration
+- Analyze bay assignment patterns for optimization
+- Check for equipment issues causing delays
+
+#### Low Throughput, Low Average Time
+
+```
+Total Trucks: 15
+Average Time: 38 min
+T1: 8 | T2: 5 | T3: 2
+```
+
+**Analysis**: 
+- Efficient operations but low demand
+- May indicate scheduling/arrival issues
+
+**Action Items**:
+- Verify expected truck volume with logistics team
+- Check for external factors (weather, supplier delays)
+- Consider resource reallocation if consistently low
+
+#### Balanced Performance
+
+```
+Total Trucks: 32
+Average Time: 42 min
+T1: 14 | T2: 12 | T3: 6
+```
+
+**Analysis**: 
+- Optimal performance across all metrics
+- Even distribution across shifts
+
+**Action Items**:
+- Maintain current processes
+- Document successful practices for training
+
+### Shift Comparison
+
+#### Unbalanced Shift Distribution
+
+```
+T1: 25 | T2: 8 | T3: 3
+```
+
+**Possible Causes**:
+- Supplier delivery schedules favor morning arrivals
+- Reduced staffing or bay availability in T2/T3
+- Product types arriving in T1 are faster to process
+
+**Action Items**:
+- Coordinate with suppliers to distribute arrivals
+- Review staffing levels for afternoon/night shifts
+- Analyze product mix by shift
+
+#### Consistent Cross-Shift Performance
+
+```
+T1: 12 | T2: 11 | T3: 10
+```
+
+**Analysis**: 
+- Well-balanced operations
+- Effective 24-hour yard utilization
+
+## Exporting Report Data
+
+<Warning>
+  Dashboard Backus does **not** currently support direct report export (PDF, CSV, Excel).
+</Warning>
+
+### Manual Export Workaround
+
+To capture report data:
+
+1. **Screenshot Method**:
+   - Open Report Modal
+   - Take screenshot (Windows: Win+Shift+S, Mac: Cmd+Shift+4)
+   - Paste into documentation or email
+
+2. **Manual Transcription**:
+   - Copy metrics into Excel/Google Sheets
+   - Format for presentation or analysis
+
+3. **Database Query** (requires technical access):
+   ```sql
+   -- Daily summary report
+   SELECT 
+     fecha,
+     turno_1,
+     turno_2,
+     turno_3,
+     turno_1 + turno_2 + turno_3 AS total
+   FROM vista_dashboard_turnos
+   WHERE fecha >= CURRENT_DATE - INTERVAL '7 days'
+   ORDER BY fecha DESC;
+   ```
+
+<Tip>
+  For automated reporting needs, contact your development team to implement scheduled reports or API endpoints.
+</Tip>
+
+## Historical Data Access
+
+### Current Limitations
+
+The Report Modal only displays **current session** and **today's data**:
+
+- **Total Trucks**: Session-specific (resets on new session)
+- **Average Yard Time**: Today only (CURRENT_DATE filter)
+- **Shift Counts**: Today only (fecha = CURRENT_DATE filter)
+
+<Note>
+  Historical trend analysis requires direct database access via Supabase dashboard or custom reporting tools.
+</Note>
+
+### Accessing Historical Data (Admin)
+
+If you have Supabase dashboard access:
+
+1. **Login to Supabase**:
+   - Navigate to project dashboard
+   - Go to Table Editor or SQL Editor
+
+2. **Query Historical Data**:
+   ```sql
+   -- Average yard time trend (last 30 days)
+   SELECT 
+     fecha,
+     AVG((hora_salida - hora_llegada) - incident_time) AS avg_net_time
+   FROM viajes_camiones
+   WHERE estado = 'Finalizado'
+     AND fecha >= CURRENT_DATE - INTERVAL '30 days'
+   GROUP BY fecha
+   ORDER BY fecha;
+   
+   -- Shift counts by week
+   SELECT 
+     DATE_TRUNC('week', fecha) AS week,
+     SUM(turno_1) AS t1_total,
+     SUM(turno_2) AS t2_total,
+     SUM(turno_3) AS t3_total
+   FROM vista_dashboard_turnos
+   WHERE fecha >= CURRENT_DATE - INTERVAL '12 weeks'
+   GROUP BY week
+   ORDER BY week DESC;
+   ```
+
+3. **Export Query Results**:
+   - Supabase provides CSV export for query results
+   - Use for further analysis in Excel or BI tools
+
+## Report Best Practices
+
+<AccordionGroup>
+  <Accordion title="Generate Reports at Shift End">
+    - Capture final metrics before logging out
+    - Include report data in shift handoff documentation
+    - Compare to previous shift for trend awareness
+  </Accordion>
+  
+  <Accordion title="Weekly Performance Reviews">
+    - Compile daily reports into weekly summaries
+    - Calculate weekly averages for yard time and throughput
+    - Identify day-of-week patterns (e.g., Mondays consistently higher volume)
+  </Accordion>
+  
+  <Accordion title="Share Insights with Operations Team">
+    - Communicate significant deviations from targets
+    - Highlight exceptional performance days for recognition
+    - Coordinate on improvement initiatives based on data
+  </Accordion>
+  
+  <Accordion title="Track Improvement Initiatives">
+    - Baseline metrics before process changes
+    - Monitor impact of new procedures on average yard time
+    - Document lessons learned from successful interventions
+  </Accordion>
+</AccordionGroup>
+
+## Future Reporting Features
+
+Planned enhancements to the reporting system:
+
+<CardGroup cols={2}>
+  <Card title="PDF Export" icon="file-pdf">
+    One-click export of session reports to PDF format for archival and distribution.
+  </Card>
+  
+  <Card title="Historical Trends" icon="chart-line">
+    Graphical visualizations of performance trends over time (daily, weekly, monthly).
+  </Card>
+  
+  <Card title="Incident Analytics" icon="triangle-exclamation">
+    Detailed breakdown of incident frequency, duration, and impact by bay and product type.
+  </Card>
+  
+  <Card title="Scheduled Reports" icon="clock">
+    Automated daily/weekly email reports to stakeholders with key performance indicators.
+  </Card>
+</CardGroup>
+
+<Info>
+  Contact your development team to request priority on specific reporting features.
+</Info>
+
+## Troubleshooting
+
+### Report Shows "—" for Average Time
+
+**Cause**: No trucks have been finalized today (estado='Finalizado')
+
+**Solution**: 
+- Verify trucks are being properly exited (not just assigned)
+- Check that `hora_salida` is being set in database
+- Confirm date filter is correct (may be timezone issue)
+
+### Shift Counts Don't Match Expectations
+
+**Cause**: 
+- Trucks finalized in one shift but counted in another due to timing
+- Database view not refreshing properly
+
+**Solution**:
+1. Close and reopen Report Modal to force refresh
+2. Verify shift boundaries (07:00, 15:00, 23:00 cutoffs)
+3. Check system time is synchronized correctly
+
+### Report Data Frozen/Not Updating
+
+**Cause**: Network connectivity issue or Supabase timeout
+
+**Solution**:
+1. Check "Actualizando…" indicator - should disappear within 2-3 seconds
+2. Close modal and reopen to retry fetch
+3. Verify internet connection and Supabase status
+4. Check browser console for API errors
+
+### Total Trucks Higher Than Shift Sum
+
+**Cause**: 
+- "Total Trucks" includes session-only data (local state)
+- Shift counts are database-sourced (may include other sessions)
+
+**Explanation**: 
+```
+Session Total: 15 trucks (assigned in current session)
+Shift Sum: T1=8 + T2=5 + T3=2 = 15 (finalized today)
+
+If session started mid-shift, some trucks finalized before session start
+aren't in session total but ARE in shift counts.
+```
+
+<Check>
+  This discrepancy is expected and does not indicate an error. Compare shift counts to daily targets, not session totals.
+</Check>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Getting Started" icon="rocket" href="/guides/getting-started">
+    Return to the getting started guide for basic navigation
+  </Card>
+  
+  <Card title="Bay Assignment" icon="truck-ramp-box" href="/guides/bay-assignment">
+    Review bay assignment workflows and validation rules
+  </Card>
+  
+  <Card title="API Reference" icon="code" href="/api-reference/introduction">
+    Explore technical API documentation for custom integrations
+  </Card>
+  
+  <Card title="Database Schema" icon="database" href="/database-schema">
+    Understand the underlying data structure for advanced queries
+  </Card>
+</CardGroup>

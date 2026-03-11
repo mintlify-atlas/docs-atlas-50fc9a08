@@ -1,0 +1,381 @@
+---
+title: Drag and Drop
+description: Intuitive truck assignment system with validation and cross-bay transfers
+icon: hand
+---
+
+## Overview
+
+Dashboard Backus uses a native HTML5 drag-and-drop system to assign trucks from the queue to operational bays. The system includes real-time validation, visual feedback, and support for moving trucks between bays.
+
+## Drag Workflow
+
+<Steps>
+  <Step title="Select Truck from Queue">
+    Click and hold any truck card in the bottom queue panel
+  </Step>
+  <Step title="Drag to Target Bay">
+    Move cursor over the desired bay overlay on the map
+  </Step>
+  <Step title="Validation Feedback">
+    Bay border changes color:
+    - **Green glow**: Compatible bay, drop allowed
+    - **Red glow**: Incompatible bay, drop rejected
+  </Step>
+  <Step title="Drop to Assign">
+    Release mouse to assign truck to bay (if valid)
+  </Step>
+  <Step title="Supabase Update">
+    Backend updates `bahia_actual` and `estado` in real-time
+  </Step>
+</Steps>
+
+## Implementation
+
+### Drag Start Handler
+
+When a user picks up a truck from the queue:
+
+```typescript
+// TarjetaCamion.tsx
+const handleDragStart = (camion: Camion) => {
+  if (!simulacionActiva) return;
+  setCamionArrastrando(camion);
+};
+
+<div
+  draggable={simulacionActiva}
+  onDragStart={() => handleDragStart(camion)}
+  onDragEnd={() => setCamionArrastrando(null)}
+  className="cursor-grab active:cursor-grabbing"
+>
+  {/* Truck card content */}
+</div>
+```
+
+### Drop Zone Configuration
+
+Each bay overlay acts as a drop zone with validation:
+
+```typescript
+// BahiaOverlay.tsx
+<div
+  onDragOver={e => {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+    setIsDragOver(true);
+  }}
+  onDragLeave={() => setIsDragOver(false)}
+  onDrop={e => {
+    e.preventDefault();
+    setIsDragOver(false);
+    const fromBahia = e.dataTransfer.getData('fromBahia');
+    if (fromBahia) {
+      onDropFromBahia(fromBahia, bahiaId);
+    } else {
+      onDrop(bahiaId);
+    }
+  }}
+>
+  {/* Bay content */}
+</div>
+```
+
+### Validation Logic
+
+Before accepting a drop, the system validates three conditions:
+
+```typescript
+// SimuladorMapa.tsx
+const validarAsignacion = (
+  camion: Camion, 
+  bahiaId: string
+): true | string => {
+  // 1. Check if bay is occupied
+  if (enProceso[bahiaId]) {
+    return 'Bahía ocupada';
+  }
+
+  const bay = BAHIAS_CONFIG[bahiaId];
+
+  // 2. Check if truck type is allowed
+  if (!bay.camionesPermitidos.includes(camion.tipoCodigo)) {
+    return 'Tipo de camión no permitido';
+  }
+
+  // 3. Check if product is compatible with operation
+  const productos = bay.tareas[camion.operacionCodigo];
+  if (!productos?.length) {
+    return 'Operación no permitida en esta bahía';
+  }
+
+  const ok = productos.some(p =>
+    camion.producto.toUpperCase().includes(p.toUpperCase()) || 
+    p === 'MIXD' || 
+    p === 'MIXC'
+  );
+
+  if (!ok) {
+    return 'Producto no admitido en esta bahía';
+  }
+
+  return true;
+};
+```
+
+<Note>
+**Special Cases:**
+- `MIXD` (mixed unloading) allows any unloading product
+- `MIXC` (mixed loading) allows any loading product
+- Product matching is case-insensitive and uses substring matching
+</Note>
+
+## Drop Handling
+
+### Successful Assignment
+
+When validation passes:
+
+```typescript
+const handleDrop = useCallback((bahiaId: string) => {
+  setCamionArrastrando(null);
+  if (!camionArrastrando) return;
+
+  const resultado = validarAsignacion(camionArrastrando, bahiaId);
+  if (resultado !== true) {
+    notify(resultado, 'error');
+    return;
+  }
+
+  const bay = BAHIAS_CONFIG[bahiaId];
+  if (bay.alerta && !window.confirm(bay.alerta)) return;
+
+  const camion = camionArrastrando;
+  
+  // Remove from queue
+  setCola(prev => prev.filter(c => c.id !== camion.id));
+  
+  // Add to bay
+  setEnProceso(prev => ({
+    ...prev,
+    [bahiaId]: { ...camion, bahiaActual: bahiaId }
+  }));
+
+  // Update Supabase
+  handleDropBahiaReal(camion.id_viaje, bay.nombre);
+
+  // Update statistics
+  const turno = getTurnoActual();
+  setStats(prev => ({
+    ...prev,
+    total: prev.total + 1,
+    atendidosTurno1: prev.atendidosTurno1 + (turno === 1 ? 1 : 0),
+    atendidosTurno2: prev.atendidosTurno2 + (turno === 2 ? 1 : 0),
+    atendidosTurno3: prev.atendidosTurno3 + (turno === 3 ? 1 : 0),
+  }));
+}, [camionArrastrando, notify]);
+```
+
+### Supabase Backend Update
+
+```typescript
+export async function actualizarBahiaDirecto(
+  id_viaje: string,
+  bahia_actual: string,
+  estado: 'Cargando' | 'Descargando'
+): Promise<boolean> {
+  const payload = { bahia_actual, estado };
+  const { data, error } = esIdNumerico(id_viaje)
+    ? await supabase.from(T_VIAJES).update(payload).eq('id', Number(id_viaje)).select('id')
+    : await supabase.from(T_VIAJES).update(payload).eq('id_viaje', id_viaje).select('id');
+
+  if (error) {
+    manejarError('actualizarBahiaDirecto', error);
+    return false;
+  }
+  return true;
+}
+```
+
+## Bay-to-Bay Transfers
+
+Operators can move trucks between bays without returning them to the queue:
+
+```typescript
+const handleDropFromBahia = (fromBahiaId: string, toBahiaId: string) => {
+  const camion = enProceso[fromBahiaId];
+  if (!camion) return;
+
+  const resultado = validarAsignacion(
+    { ...camion, bahiaActual: undefined }, 
+    toBahiaId
+  );
+
+  if (resultado !== true) {
+    notify(resultado, 'error');
+    return;
+  }
+
+  if (enProceso[toBahiaId]) {
+    notify('Bahía destino ocupada', 'error');
+    return;
+  }
+
+  // Move truck atomically
+  setEnProceso(prev => {
+    const c = { ...prev };
+    delete c[fromBahiaId];
+    c[toBahiaId] = { ...camion, bahiaActual: toBahiaId };
+    return c;
+  });
+
+  // Update backend
+  handleDropBahiaReal(camion.id_viaje, BAHIAS_CONFIG[toBahiaId].nombre);
+  
+  notify(`🔄 ${camion.placa} → ${BAHIAS_CONFIG[toBahiaId].nombre}`, 'info');
+};
+```
+
+<Warning>
+Bay-to-bay transfers preserve the truck's original queue arrival time for accurate traffic light calculations.
+</Warning>
+
+## Visual Feedback
+
+### Drag Over State
+
+Bays change appearance when a truck hovers over them:
+
+```typescript
+let dropColor   = darkMode ? 'rgba(15,23,42,0.85)' : 'rgba(255,255,255,0.90)';
+let borderColor = darkMode ? 'rgba(148,163,184,0.22)' : 'rgba(100,116,139,0.25)';
+
+if (isDragOver && !ocupada) {
+  dropColor = camionArrastrando && validarFn(camionArrastrando, bahiaId) === true
+    ? 'rgba(22,163,74,0.52)'  // Green for valid
+    : 'rgba(220,38,38,0.44)';  // Red for invalid
+}
+```
+
+### Cursor States
+
+```css
+.cursor-grab { cursor: grab; }
+.active\:cursor-grabbing:active { cursor: grabbing; }
+.cursor-copy { cursor: copy; }  /* Used for drop zones */
+```
+
+## Truck Types and Compatibility
+
+Each bay has a whitelist of allowed truck types:
+
+```typescript
+export type TipoCamion = 'P' | 'J' | 'B' | 'T' | 'O';
+
+export const NOMBRES_TIPO_CAMION: Record<TipoCamion, string> = {
+  P: 'Parihuelero',  // Pallet truck
+  J: 'Jumbo',         // Large truck
+  B: 'Bi-tren',       // Double trailer
+  T: 'Tolva',         // Hopper truck
+  O: 'Otros',         // Other types
+};
+
+// Example bay configuration
+'b10': {
+  nombre: 'Bahía 10',
+  camionesPermitidos: ['P'],  // Only Parihuelero allowed
+  tareas: {
+    D: ['PT','PP','MIXD'],
+    C: ['PP','PT','MIXC']
+  },
+  alerta: '¡ATENCIÓN! Coordina con T2.',
+  posX: 76.81,
+  posY: 33.62
+}
+```
+
+## Confirmation Alerts
+
+Some bays require explicit confirmation before assignment:
+
+```typescript
+const bay = BAHIAS_CONFIG[bahiaId];
+if (bay.alerta && !window.confirm(bay.alerta)) {
+  return;  // User cancelled
+}
+```
+
+**Example Alert:**
+> **Bahía 10 / Bahía 12**  
+> "¡ATENCIÓN! Coordina con T2."  
+> Requires coordination with the T2 shift supervisor before assignment.
+
+## Simulation Mode Auto-Exit
+
+In simulation mode, trucks automatically exit after 8 seconds (real mode: 8 minutes):
+
+```typescript
+if (config.modo === 'simulacion') {
+  setTimeout(() => {
+    setEnProceso(prev => {
+      if (!prev[bahiaId]) return prev;
+      
+      const tiempoPatio = (Date.now() - camion.tiempoEntradaPatio) / 60_000;
+      setStats(s => ({
+        ...s,
+        tiemposTotalPatio: [...s.tiemposTotalPatio, tiempoPatio],
+      }));
+
+      handleMarcarSalidaReal(camion.id_viaje);
+      notify(`✅ Finalizado (auto): ${camion.placa}`, 'success');
+      
+      const c = { ...prev };
+      delete c[bahiaId];
+      return c;
+    });
+  }, 8 * factor);  // factor = 1000 (simulation) or 60000 (real)
+}
+```
+
+## Error Handling
+
+<Tabs>
+  <Tab title="Occupied Bay">
+    ```typescript
+    if (enProceso[bahiaId]) {
+      notify('Bahía ocupada', 'error');
+      return;
+    }
+    ```
+    **User sees:** Red toast notification "Bahía ocupada"
+  </Tab>
+  <Tab title="Wrong Truck Type">
+    ```typescript
+    if (!bay.camionesPermitidos.includes(camion.tipoCodigo)) {
+      notify('Tipo de camión no permitido', 'error');
+      return;
+    }
+    ```
+    **User sees:** Red toast notification with specific error
+  </Tab>
+  <Tab title="Incompatible Product">
+    ```typescript
+    if (!productos.some(p => camion.producto.toUpperCase().includes(p))) {
+      notify('Producto no admitido en esta bahía', 'error');
+      return;
+    }
+    ```
+    **User sees:** Red toast notification explaining the mismatch
+  </Tab>
+</Tabs>
+
+## Related Features
+
+<CardGroup cols={2}>
+  <Card title="Interactive Map" icon="map" href="./interactive-map">
+    Understand the satellite map and bay positioning
+  </Card>
+  <Card title="Traffic Light System" icon="traffic-light" href="./traffic-light-system">
+    See how queue time affects truck priority
+  </Card>
+</CardGroup>

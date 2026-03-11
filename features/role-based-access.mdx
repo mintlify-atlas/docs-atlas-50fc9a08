@@ -1,0 +1,442 @@
+---
+title: Role-Based Access
+description: Secure authentication with admin and client roles for controlled dashboard access
+icon: shield
+---
+
+## Overview
+
+Dashboard Backus implements a two-tier role system with distinct capabilities for administrators and clients. Authentication is handled via a custom PIN system backed by Supabase, with MD5 hashing for security.
+
+## User Roles
+
+<CardGroup cols={2}>
+  <Card title="Admin" icon="user-shield" color="#3b82f6">
+    **Full Control**
+    - Configure traffic light thresholds
+    - Register and close incidents
+    - Manually finalize truck exits
+    - Access all dashboard panels
+    - Switch between simulation/real modes
+  </Card>
+  <Card title="Cliente" icon="user" color="#8b5cf6">
+    **Read-Only Monitoring**
+    - View real-time truck queue
+    - Monitor bay assignments
+    - See dashboard statistics
+    - **Fixed** traffic light thresholds (60/120)
+    - **Cannot** register incidents or modify config
+  </Card>
+</CardGroup>
+
+## Database Schema
+
+```sql
+CREATE TABLE usuarios (
+  id SERIAL PRIMARY KEY,
+  email TEXT UNIQUE NOT NULL,
+  pin TEXT NOT NULL,  -- MD5 hash of PIN
+  rol TEXT NOT NULL CHECK (rol IN ('admin', 'cliente')),
+  nombre TEXT,
+  activo BOOLEAN DEFAULT TRUE
+);
+
+-- Example admin user
+INSERT INTO usuarios (email, pin, rol, nombre, activo)
+VALUES (
+  'admin@backus.com',
+  MD5('1234'),  -- PostgreSQL MD5 function
+  'admin',
+  'Administrador Principal',
+  TRUE
+);
+
+-- Example client user
+INSERT INTO usuarios (email, pin, rol, nombre, activo)
+VALUES (
+  'cliente@cementospacasmayo.com',
+  MD5('5678'),
+  'cliente',
+  'Monitor Cementos Pacasmayo',
+  TRUE
+);
+```
+
+## TypeScript Interfaces
+
+```typescript
+// types.ts
+export type Rol = 'admin' | 'cliente';
+
+export interface ConfigSimulador {
+  modo: 'simulacion' | 'real';
+  tiempoAmarillo: number;
+  tiempoRojo: number;
+  rol: Rol;
+}
+
+// supabaseService.ts
+export interface UsuarioLogin {
+  id: number;
+  email: string;
+  rol: 'admin' | 'cliente';
+  nombre: string | null;
+}
+```
+
+## Authentication Flow
+
+<Steps>
+  <Step title="User Enters Credentials">
+    Email and PIN entered in login form
+  </Step>
+  <Step title="PIN Hashing">
+    Frontend hashes PIN with MD5 (same algorithm as PostgreSQL)
+  </Step>
+  <Step title="Database Query">
+    Supabase query matches email + pin hash + active status
+  </Step>
+  <Step title="Session Start">
+    User role determines available features
+  </Step>
+</Steps>
+
+### Login Function
+
+```typescript
+export async function loginUsuario(
+  email: string,
+  password: string
+): Promise<UsuarioLogin | null> {
+  const pinHash = md5Hex(password);
+
+  const { data, error } = await supabase
+    .from('usuarios')
+    .select('id, email, rol, nombre')
+    .eq('email', email.trim().toLowerCase())
+    .eq('pin', pinHash)
+    .eq('activo', true)
+    .maybeSingle();
+
+  if (error) {
+    manejarError('loginUsuario', error);
+    return null;
+  }
+  if (!data) return null;
+
+  return {
+    id: data.id as number,
+    email: data.email as string,
+    rol: data.rol as 'admin' | 'cliente',
+    nombre: data.nombre as string | null,
+  };
+}
+```
+
+### MD5 Hashing
+
+The frontend uses a pure JavaScript MD5 implementation that produces identical output to PostgreSQL's `md5()` function:
+
+```typescript
+function md5Hex(input: string): string {
+  // ... RFC 1321 implementation (513 lines)
+  // Returns 32-character hex string
+}
+
+// Examples:
+md5Hex('1234') // "81dc9bdb52d04dc20036dbd8313ed055"
+md5Hex('5678') // "674f3c2c1a8a6f900461d9c34f301c14"
+```
+
+<Warning>
+**Security Note:** MD5 is used for **compatibility** with existing PostgreSQL functions, not for cryptographic security. For production systems, consider migrating to bcrypt or Argon2.
+</Warning>
+
+## Role Enforcement
+
+### Configuration Modal
+
+Admin users see editable threshold fields:
+
+```typescript
+// ModalConfig.tsx - Admin view
+<input
+  type="number"
+  min="1"
+  max="999"
+  value={config.tiempoAmarillo}
+  onChange={e => setConfig({
+    ...config,
+    tiempoAmarillo: Number(e.target.value)
+  })}
+  disabled={false}  // Editable for admins
+/>
+```
+
+Client users see **grayed-out** fields:
+
+```typescript
+// ModalConfig.tsx - Client view
+<input
+  type="number"
+  value={TIEMPOS_CLIENTE.tiempoAmarillo}
+  disabled={true}  // Read-only for clients
+  className="opacity-50 cursor-not-allowed"
+/>
+```
+
+### Hardcoded Client Thresholds
+
+```typescript
+// SimuladorMapa.tsx
+const TIEMPOS_CLIENTE = { 
+  tiempoAmarillo: 60, 
+  tiempoRojo: 120 
+} as const;
+
+const handleConfirm = (c: ConfigSimulador) => {
+  const configFinal: ConfigSimulador = rolInicial === 'cliente'
+    ? { ...c, rol: 'cliente', ...TIEMPOS_CLIENTE }  // Force fixed values
+    : { ...c, rol: 'admin' };
+  
+  setConfig(configFinal);
+  setSimulacionActiva(true);
+};
+```
+
+<Note>
+Any attempt by a client to modify thresholds (via browser dev tools) is overwritten with `TIEMPOS_CLIENTE` constants before saving.
+</Note>
+
+## Feature Access Matrix
+
+| Feature | Admin | Cliente |
+|---------|-------|--------|
+| View truck queue | ✅ | ✅ |
+| Drag & drop trucks to bays | ✅ | ✅ |
+| View dashboard panels | ✅ | ✅ |
+| Register incidents | ✅ | ❌ |
+| Close incidents | ✅ | ❌ |
+| Manually finalize trucks | ✅ | ❌ |
+| Configure traffic light thresholds | ✅ | ❌ |
+| Switch simulation/real mode | ✅ | ✅ |
+| Generate reports | ✅ | ✅ |
+| Toggle dark/light mode | ✅ | ✅ |
+| Toggle help mode | ✅ | ✅ |
+
+## Conditional UI Rendering
+
+### Incident Button
+
+```typescript
+// BahiaOverlay.tsx
+{config.rol === 'admin' && (
+  <button onClick={() => setShowIncidencia(true)}>
+    ⚠️ Incid.
+  </button>
+)}
+```
+
+### Finalize Button
+
+```typescript
+// BahiaOverlay.tsx
+{config.rol === 'admin' && (
+  <button onClick={handleFinalizar}>
+    ✅ Salida
+  </button>
+)}
+```
+
+### Configuration Fields
+
+```typescript
+// ModalConfig.tsx
+const readOnly = config.rol === 'cliente';
+
+<input
+  type="number"
+  value={config.tiempoAmarillo}
+  disabled={readOnly}
+  className={readOnly ? 'opacity-50 cursor-not-allowed' : ''}
+/>
+```
+
+## Session Management
+
+### Logout Handler
+
+```typescript
+const handleCerrarSesion = () => {
+  if (window.confirm('¿Deseas cerrar la sesión?')) {
+    setSimulacionActiva(false);
+    setCola([]);
+    setEnProceso({});
+    notify('👋 Sesión cerrada', 'info');
+    setTimeout(() => onLogout(), 800);  // 800ms delay for toast visibility
+  }
+};
+```
+
+### Header Display
+
+```typescript
+// Header.tsx
+<Header
+  darkMode={darkMode}
+  simulacionActiva={simulacionActiva}
+  config={config}
+  rol={rolInicial}  // Passed from parent
+  nombreUsuario={nombreUsuario}
+  onCerrarSesion={handleCerrarSesion}
+/>
+
+// Display role badge
+<span className={`
+  px-2 py-1 rounded-md text-xs font-bold uppercase
+  ${config.rol === 'admin' ? 'bg-blue-500 text-white' : 'bg-purple-500 text-white'}
+`}>
+  {config.rol === 'admin' ? '👮 Admin' : '👁️ Cliente'}
+</span>
+```
+
+## API Security
+
+### Row-Level Security (RLS)
+
+Supabase RLS policies ensure clients cannot modify critical tables:
+
+```sql
+-- Example RLS policy for incidencias table
+CREATE POLICY "Admin only can insert incidents"
+  ON incidencias
+  FOR INSERT
+  TO authenticated
+  USING (
+    (SELECT rol FROM usuarios WHERE email = auth.email()) = 'admin'
+  );
+
+CREATE POLICY "Admin only can update incidents"
+  ON incidencias
+  FOR UPDATE
+  TO authenticated
+  USING (
+    (SELECT rol FROM usuarios WHERE email = auth.email()) = 'admin'
+  );
+
+CREATE POLICY "All can read incidents"
+  ON incidencias
+  FOR SELECT
+  TO authenticated
+  USING (true);
+```
+
+<Warning>
+**Important:** Even if a client bypasses frontend restrictions, RLS policies on Supabase prevent unauthorized writes.
+</Warning>
+
+## Role-Specific Configuration
+
+### Admin Configuration
+
+```typescript
+const [config, setConfig] = useState<ConfigSimulador>({
+  modo: 'simulacion',
+  rol: 'admin',
+  tiempoAmarillo: 60,  // Editable
+  tiempoRojo: 120,     // Editable
+});
+```
+
+### Client Configuration
+
+```typescript
+const [config, setConfig] = useState<ConfigSimulador>({
+  modo: 'real',
+  rol: 'cliente',
+  tiempoAmarillo: TIEMPOS_CLIENTE.tiempoAmarillo,  // Fixed: 60
+  tiempoRojo: TIEMPOS_CLIENTE.tiempoRojo,          // Fixed: 120
+});
+```
+
+## User Activation
+
+The `activo` column allows administrators to disable accounts without deletion:
+
+```sql
+-- Deactivate user
+UPDATE usuarios 
+SET activo = FALSE 
+WHERE email = 'cliente@example.com';
+
+-- Reactivate user
+UPDATE usuarios 
+SET activo = TRUE 
+WHERE email = 'cliente@example.com';
+```
+
+Inactive users cannot log in:
+
+```typescript
+const { data, error } = await supabase
+  .from('usuarios')
+  .select('id, email, rol, nombre')
+  .eq('email', email.trim().toLowerCase())
+  .eq('pin', pinHash)
+  .eq('activo', true)  // ← Only active users
+  .maybeSingle();
+```
+
+## Adding New Users
+
+<Tabs>
+  <Tab title="SQL">
+    ```sql
+    INSERT INTO usuarios (email, pin, rol, nombre, activo)
+    VALUES (
+      'newadmin@backus.com',
+      MD5('newpin123'),
+      'admin',
+      'Nuevo Administrador',
+      TRUE
+    );
+    ```
+  </Tab>
+  <Tab title="Supabase Dashboard">
+    1. Navigate to **Table Editor** → `usuarios`
+    2. Click **Insert row**
+    3. Fill fields:
+       - `email`: User email
+       - `pin`: Use PostgreSQL function `md5('pin_text')`
+       - `rol`: Select `admin` or `cliente`
+       - `nombre`: Display name
+       - `activo`: Check `TRUE`
+    4. Click **Save**
+  </Tab>
+</Tabs>
+
+## Password Reset
+
+Since PIN hashes are stored, resets require database access:
+
+```sql
+-- Reset PIN to "newpin123"
+UPDATE usuarios 
+SET pin = MD5('newpin123') 
+WHERE email = 'user@example.com';
+```
+
+<Note>
+**Production Recommendation:** Implement a self-service password reset flow with email verification for better UX.
+</Note>
+
+## Related Features
+
+<CardGroup cols={2}>
+  <Card title="Traffic Light System" icon="traffic-light" href="./traffic-light-system">
+    See how client roles have fixed thresholds
+  </Card>
+  <Card title="Incident Management" icon="triangle-exclamation" href="./incident-management">
+    Learn why only admins can register incidents
+  </Card>
+</CardGroup>
