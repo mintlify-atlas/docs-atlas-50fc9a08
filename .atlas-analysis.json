@@ -1,0 +1,110 @@
+{
+  "projectType": "saas",
+  "projectName": "Dashboard Backus",
+  "projectDescription": "Interactive truck yard management system for optimizing bay assignments and tracking operations at Backus facility",
+  "theme": "aspen",
+  "primaryColor": "#fbc926",
+  "lightColor": "#8c73fa",
+  "darkColor": "#ed232b",
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Get Started",
+            "pages": [
+              "introduction",
+              "quickstart",
+              "installation"
+            ]
+          },
+          {
+            "group": "Core Features",
+            "pages": [
+              "features/interactive-map",
+              "features/drag-and-drop",
+              "features/traffic-light-system",
+              "features/dashboard-panels",
+              "features/incident-management",
+              "features/role-based-access"
+            ]
+          },
+          {
+            "group": "User Guides",
+            "pages": [
+              "guides/getting-started",
+              "guides/bay-assignment",
+              "guides/monitoring-operations",
+              "guides/handling-incidents",
+              "guides/reports"
+            ]
+          },
+          {
+            "group": "Configuration",
+            "pages": [
+              "configuration/environment",
+              "configuration/database",
+              "configuration/bay-configuration",
+              "configuration/webhooks"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "API Reference",
+        "groups": [
+          {
+            "group": "Supabase Services",
+            "pages": [
+              "api/supabase-service",
+              "api/queue-operations",
+              "api/incident-operations",
+              "api/trip-operations"
+            ]
+          },
+          {
+            "group": "Data Types",
+            "pages": [
+              "api/types/camion",
+              "api/types/bahia-config",
+              "api/types/views"
+            ]
+          },
+          {
+            "group": "Components",
+            "pages": [
+              "api/components/simulador-mapa",
+              "api/components/bahia-overlay",
+              "api/components/tarjeta-camion",
+              "api/components/panel-flotante"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "Interactive satellite map with drag-and-drop bay assignment",
+    "Real-time traffic light monitoring system (green/yellow/red alerts)",
+    "Floating dashboard panels showing priority units, shift counts, and average yard time",
+    "Incident tracking and management with automatic alerts",
+    "Role-based access control (Admin/Client)",
+    "Supabase integration for real-time data synchronization",
+    "n8n webhook automation for external integrations",
+    "Dark mode UI optimized for operational visibility"
+  ],
+  "publicApiSurface": [
+    "fetchCamionesCola() - Retrieve trucks in queue",
+    "fetchUnidadPrioridad() - Get highest priority unit",
+    "fetchDashboardTurnos() - Get shift counts",
+    "fetchPromedioPatioNeto() - Get average yard time",
+    "actualizarBahiaDirecto() - Update bay assignment",
+    "marcarSalidaDirecto() - Mark truck departure",
+    "abrirIncidencia() - Open new incident",
+    "cerrarIncidencia() - Close open incident",
+    "loginUsuario() - Authenticate user",
+    "BAHIAS_CONFIG - Bay configuration mapping",
+    "NOMBRES_TIPO_CAMION - Truck type definitions"
+  ]
+}
