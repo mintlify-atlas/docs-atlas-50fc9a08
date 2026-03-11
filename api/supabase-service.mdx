@@ -94,11 +94,7 @@ Incident record structure.
 
 ## Authentication
 
-See the `loginUsuario` function for MD5-based authentication against the `usuarios` table.
-
-<Card title="Authentication" icon="lock" href="#authentication">
-  Uses MD5 hashing (RFC 1321) to match PostgreSQL's `md5()` function
-</Card>
+The `loginUsuario` function provides MD5-based authentication against the `usuarios` table, using MD5 hashing (RFC 1321) to match PostgreSQL's `md5()` function. See the [Trip Operations](/api/trip-operations) documentation for implementation details.
 
 ## Error Handling
 
